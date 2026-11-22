@@ -468,7 +468,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
             trailer,
 
-            "EN_ORIGEN",
+            "CREADO",
 
             toDateTime(body.fecha_pedido),
 

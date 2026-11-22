@@ -1,26 +1,58 @@
 @import "tailwindcss";
+*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;color:#20242a;background:#f5f6f8;font-family:Arial,sans-serif}a{color:inherit;text-decoration:none}button,input,select,textarea{font:inherit}button{cursor:pointer;border:0;border-radius:6px;padding:10px 14px;background:#263747;color:#fff}button:disabled{opacity:.6;cursor:wait}button.secondary{background:#e8edf2;color:#263747}input,select,textarea{width:100%;min-width:0;border:1px solid #cbd2da;border-radius:6px;padding:9px;background:#fff;color:#20242a}textarea{min-height:90px;resize:vertical}.shell{display:flex;min-height:100vh}.sidebar{position:sticky;top:0;align-self:flex-start;width:245px;height:100vh;flex:0 0 245px;overflow-y:auto;background:#202a36;color:#fff;padding:22px 14px}.sidebar h2{margin:0 8px 24px;font-size:19px}.sidebar nav{display:grid;gap:6px}.sidebar a{display:block;padding:11px;border-radius:6px;color:#e4e9ef}.sidebar a:hover,.sidebar a.active{background:#354456}main{flex:1;min-width:0;padding:26px;overflow-x:hidden}section{width:100%;max-width:1500px;margin:0 auto}header{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:18px}h1{margin:0;font-size:clamp(22px,3vw,28px)}.panel{padding:16px;margin-bottom:16px;border:1px solid #e1e5e9;border-radius:9px;background:#fff}.responsive-table{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #e5e8ec;text-align:left;vertical-align:middle}th{white-space:nowrap;background:#f0f3f6}.formgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field{display:grid;gap:6px;min-width:0;margin:10px 0}.checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:15px 0}.checks label{display:flex;align-items:center;gap:9px}.checks input{width:auto}.document-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,260px);gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid #e5e8ec}.document-row:last-child{border:0}.document-row p{margin:5px 0 0}.detail-panel{margin-top:16px}.message{padding:11px 13px;border-radius:6px;background:#eef5ed}.message.error{background:#fff0ef;color:#9b2720}.muted{color:#66717d;font-size:13px}@media(max-width:900px){.sidebar{width:205px;flex-basis:205px}main{padding:18px}}@media(max-width:680px){.shell{display:block}.sidebar{position:sticky;top:0;z-index:20;width:100%;height:auto;padding:10px 12px}.sidebar h2{margin:0 0 8px;font-size:17px}.sidebar nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.sidebar a{padding:8px;font-size:12px}main{padding:14px 10px}header{align-items:flex-start;flex-wrap:wrap}.formgrid,.checks{grid-template-columns:1fr}.panel{padding:12px}.document-row{grid-template-columns:1fr;gap:5px}th,td{padding:8px;font-size:13px}}
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+.table-link {
+  border: 0;
+  background: transparent;
+  color: var(--foreground, inherit);
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+.status-pill {
+  display: inline-block;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+.detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.detail-heading h2 { margin-top: 0; }
+
+/* Consistent status colors across shipment, document, inspection, risk and approval views. */
+.status-pill {
+  display: inline-block;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  font-weight: 600;
 }
+.status-green { color: #176534; background: #e7f6ec; border-color: #9bd3ad; }
+.status-yellow { color: #805b00; background: #fff4cc; border-color: #e6c65c; }
+.status-red { color: #982c2c; background: #fde8e7; border-color: #e7a4a1; }
+.status-orange { color: #8a4310; background: #fff0df; border-color: #e9b17b; }
+.status-neutral { color: #4b5563; background: #eef1f4; border-color: #cbd2da; }
+
+.button-approve { background: #218447; color: #fff; }
+.button-approve:hover:not(:disabled) { background: #176534; }
+.button-reject { background: #b83232; color: #fff; }
+.button-reject:hover:not(:disabled) { background: #922626; }
+.approval-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.approval-actions button { white-space: nowrap; }
+
+

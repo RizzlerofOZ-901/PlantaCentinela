@@ -1,4 +1,3 @@
-
 import mysql from "mysql2/promise";
 
 const pool = mysql.createPool({
@@ -8,9 +7,13 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
 
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  // Enable SSL only when the environment requires it.
+  ssl:
+    process.env.DB_SSL === "true"
+      ? {
+          rejectUnauthorized: false,
+        }
+      : undefined,
 
   waitForConnections: true,
   connectionLimit: 5,
@@ -20,4 +23,5 @@ const pool = mysql.createPool({
 });
 
 export default pool;
+
 

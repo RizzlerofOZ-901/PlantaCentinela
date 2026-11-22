@@ -629,12 +629,20 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ id: result.insertId }, { status: 201 });
 
   } catch (error) {
+  console.error("POST database error:", {
+    tipo,
+    error,
+    code: (error as any)?.code,
+    errno: (error as any)?.errno,
+    sqlMessage: (error as any)?.sqlMessage,
+    sqlState: (error as any)?.sqlState,
+  });
 
-    console.error("POST database error:", error);
-
-    return fail("No se pudo guardar. Revisa la terminal de Next.js y valida los datos y claves foráneas.", 500);
-
-  }
+  return fail(
+    "No se pudo guardar. Revisa los registros de la función en Vercel.",
+    500
+  );
+}
 
 }
 

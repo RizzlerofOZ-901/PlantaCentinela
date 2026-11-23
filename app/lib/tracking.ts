@@ -139,6 +139,42 @@ function pointAtDistance(route: LatLng[], targetKm: number): LatLng {
   return route[route.length - 1];
 }
 
+async function ensureTrackingCheckpoints(
+  shipmentId: number,
+  routeCoordinates: LatLng[],
+  distanceKm: number
+): Promise<void> {
+  const checkpoints: Array<[number, number, number, number, number]> = [];
+
+  let checkpointNumber = 1;
+
+  for (let km = 50; km < distanceKm; km += 50) {
+    const [lat, lng] = pointAtDistance(routeCoordinates, km);
+
+    checkpoints.push([
+      shipmentId,
+      checkpointNumber++,
+      km,
+      lat,
+      lng,
+    ]);
+  }
+
+  if (!checkpoints.length) return;
+
+  const placeholders = checkpoints
+    .map(() => "(?, ?, ?, ?, ?)")
+    .join(", ");
+
+  await pool.query(
+    `INSERT IGNORE INTO tracking_checkpoints
+      (id_envio, numero_checkpoint, distancia_acumulada_km,
+       latitud, longitud)
+     VALUES ${placeholders}`,
+    checkpoints.flat()
+  );
+}
+
 export function getPositionOnRoute(
   route: LatLng[],
   targetKm: number
@@ -148,11 +184,27 @@ export function getPositionOnRoute(
 
 export async function initializeTracking(shipmentId: number): Promise<void> {
   const [existing] = await pool.execute<RowDataPacket[]>(
-    "SELECT id_tracking FROM tracking_sessions WHERE id_envio = ? LIMIT 1",
-    [shipmentId]
+  `SELECT id_tracking, ruta_original, distancia_total_km
+   FROM tracking_sessions
+   WHERE id_envio = ?
+   LIMIT 1`,
+  [shipmentId]
   );
 
-  if (existing.length) return; // No reinicia una sesión existente.
+  if (existing.length) {
+    const storedRoute =
+      typeof existing[0].ruta_original === "string"
+        ? JSON.parse(existing[0].ruta_original)
+        : existing[0].ruta_original;
+
+    await ensureTrackingCheckpoints(
+      shipmentId,
+      storedRoute as LatLng[],
+      Number(existing[0].distancia_total_km)
+    );
+
+    return;
+  }
 
   const [rows] = await pool.execute<RowDataPacket[]>(
     "SELECT id_envio, nombre_cliente, estatus_general FROM envios WHERE id_envio = ? LIMIT 1",
@@ -181,20 +233,31 @@ export async function initializeTracking(shipmentId: number): Promise<void> {
 
   // Checkpoints cada 50 km medidos sobre la geometría vial.
   const checkpoints: Array<[number, number, number, number, number]> = [];
+
   let checkpointNumber = 1;
 
   for (let km = 50; km < route.distanceKm; km += 50) {
     const [lat, lng] = pointAtDistance(route.coordinates, km);
-    checkpoints.push([shipmentId, checkpointNumber++, km, lat, lng]);
+
+    checkpoints.push([
+      shipmentId,
+      checkpointNumber++,
+      km,
+      lat,
+      lng,
+    ]);
   }
 
   if (checkpoints.length) {
-    const placeholders = checkpoints.map(() => "(?, ?, ?, ?, ?)").join(", ");
+    const placeholders = checkpoints
+      .map(() => "(?, ?, ?, ?, ?)")
+      .join(", ");
+
     await pool.query(
       `INSERT IGNORE INTO tracking_checkpoints
         (id_envio, numero_checkpoint, distancia_acumulada_km,
-         latitud, longitud, estatus)
-       VALUES ${placeholders}`,
+        latitud, longitud)
+      VALUES ${placeholders}`,
       checkpoints.flat()
     );
   }

@@ -25,26 +25,32 @@ const globalForMongo = globalThis as unknown as {
 };
 
 function getClientPromise(): Promise<MongoClient> {
-  const uri = process.env.MONGODB_URI;
+  const uri = process.env.MONGODB_URI?.trim();
   if (!uri) {
     throw new Error("Falta configurar la variable MONGODB_URI.");
   }
+
   if (!globalForMongo._mongoClientPromise) {
-    const client = new MongoClient(uri);
-    globalForMongo._mongoClientPromise = client.connect();
+    const client = new MongoClient(uri, {
+      tls: true,
+      serverSelectionTimeoutMS: 10000,
+    });
+
+    globalForMongo._mongoClientPromise = client.connect().catch((err) => {
+      globalForMongo._mongoClientPromise = undefined;
+      throw err;
+    });
   }
+
   return globalForMongo._mongoClientPromise;
 }
 
 export async function getAuditDb(): Promise<Db> {
   const client = await getClientPromise();
-  const dbName = process.env.MONGODB_DB || "planta_centinela_auditoria";
+  const dbName = process.env.MONGODB_DB?.trim() || "planta_centinela_auditoria";
   return client.db(dbName);
 }
 
-/**
- * Saves an audit event to MongoDB without breaking the main MariaDB flow.
- */
 export async function logAuditEvent(event: AuditEventInput): Promise<void> {
   if (!process.env.MONGODB_URI) return;
   try {

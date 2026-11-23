@@ -20,6 +20,7 @@ type RouteResult = {
 
 function destinationFor(clientName: string): LatLng {
   const normalized = clientName.trim().toUpperCase();
+
   const match = Object.entries(DESTINATIONS).find(([name]) =>
     normalized.includes(name)
   );
@@ -39,7 +40,10 @@ async function getRoadRoute(
   avoidPolygon?: object
 ): Promise<RouteResult> {
   const key = process.env.OPENROUTESERVICE_API_KEY;
-  if (!key) throw new Error("Falta OPENROUTESERVICE_API_KEY.");
+
+  if (!key) {
+    throw new Error("Falta OPENROUTESERVICE_API_KEY.");
+  }
 
   const payload: Record<string, unknown> = {
     coordinates: [
@@ -68,28 +72,30 @@ async function getRoadRoute(
 
   const responseText = await response.text();
 
-let result: any;
+  let result: any;
 
-try {
-  result = JSON.parse(responseText);
-} catch {
-  throw new Error(
-    `HeiGIT devolvió una respuesta que no es JSON. HTTP ${response.status}. Respuesta: ${responseText.slice(0, 300)}`
-  );
-}
+  try {
+    result = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      `HeiGIT devolvió una respuesta que no es JSON. HTTP ${response.status}. Respuesta: ${responseText.slice(0, 300)}`
+    );
+  }
 
-if (!response.ok) {
-  throw new Error(
-    result?.error?.message ||
-    `Error de HeiGIT: HTTP ${response.status}`
-  );
-}
+  if (!response.ok) {
+    throw new Error(
+      result?.error?.message ||
+        `Error de HeiGIT: HTTP ${response.status}`
+    );
+  }
 
   const feature = result.features?.[0];
   const raw: number[][] = feature?.geometry?.coordinates ?? [];
 
   if (raw.length < 2) {
-    throw new Error("El proveedor no devolvió una geometría de ruta válida.");
+    throw new Error(
+      "El proveedor no devolvió una geometría de ruta válida."
+    );
   }
 
   return {
@@ -103,8 +109,10 @@ if (!response.ok) {
 
 function haversine(a: LatLng, b: LatLng): number {
   const rad = (n: number) => (n * Math.PI) / 180;
+
   const dLat = rad(b[0] - a[0]);
   const dLng = rad(b[1] - a[1]);
+
   const x =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(rad(a[0])) *
@@ -115,8 +123,13 @@ function haversine(a: LatLng, b: LatLng): number {
 }
 
 function pointAtDistance(route: LatLng[], targetKm: number): LatLng {
-  if (!route.length) throw new Error("La ruta no contiene coordenadas.");
-  if (targetKm <= 0) return route[0];
+  if (!route.length) {
+    throw new Error("La ruta no contiene coordenadas.");
+  }
+
+  if (targetKm <= 0) {
+    return route[0];
+  }
 
   let accumulated = 0;
 
@@ -139,6 +152,7 @@ function pointAtDistance(route: LatLng[], targetKm: number): LatLng {
   return route[route.length - 1];
 }
 
+// Creates any missing checkpoints without duplicating existing ones.
 async function ensureTrackingCheckpoints(
   shipmentId: number,
   routeCoordinates: LatLng[],
@@ -160,7 +174,9 @@ async function ensureTrackingCheckpoints(
     ]);
   }
 
-  if (!checkpoints.length) return;
+  if (!checkpoints.length) {
+    return;
+  }
 
   const placeholders = checkpoints
     .map(() => "(?, ?, ?, ?, ?)")
@@ -182,15 +198,19 @@ export function getPositionOnRoute(
   return pointAtDistance(route, targetKm);
 }
 
-export async function initializeTracking(shipmentId: number): Promise<void> {
+export async function initializeTracking(
+  shipmentId: number
+): Promise<void> {
+  // Check whether a tracking session already exists.
   const [existing] = await pool.execute<RowDataPacket[]>(
-  `SELECT id_tracking, ruta_original, distancia_total_km
-   FROM tracking_sessions
-   WHERE id_envio = ?
-   LIMIT 1`,
-  [shipmentId]
+    `SELECT id_tracking, ruta_original, distancia_total_km
+     FROM tracking_sessions
+     WHERE id_envio = ?
+     LIMIT 1`,
+    [shipmentId]
   );
 
+  // If it exists, repair missing checkpoints using its original route.
   if (existing.length) {
     const storedRoute =
       typeof existing[0].ruta_original === "string"
@@ -206,17 +226,28 @@ export async function initializeTracking(shipmentId: number): Promise<void> {
     return;
   }
 
+  // Retrieve shipment information if no tracking session exists.
   const [rows] = await pool.execute<RowDataPacket[]>(
-    "SELECT id_envio, nombre_cliente, estatus_general FROM envios WHERE id_envio = ? LIMIT 1",
+    `SELECT id_envio, nombre_cliente, estatus_general
+     FROM envios
+     WHERE id_envio = ?
+     LIMIT 1`,
     [shipmentId]
   );
 
-  if (!rows.length) throw new Error("No se encontró el envío.");
-  if (rows[0].estatus_general !== "EN_TRANSITO") return;
+  if (!rows.length) {
+    throw new Error("No se encontró el envío.");
+  }
 
+  if (rows[0].estatus_general !== "EN_TRANSITO") {
+    return;
+  }
+
+  // Calculate the original road route.
   const destination = destinationFor(String(rows[0].nombre_cliente));
   const route = await getRoadRoute(ORIGIN, destination);
 
+  // Create the tracking session.
   await pool.query(
     `INSERT IGNORE INTO tracking_sessions
       (id_envio, ruta_original, ruta_activa, distancia_total_km,
@@ -231,36 +262,12 @@ export async function initializeTracking(shipmentId: number): Promise<void> {
     ]
   );
 
-  // Checkpoints cada 50 km medidos sobre la geometría vial.
-  const checkpoints: Array<[number, number, number, number, number]> = [];
-
-  let checkpointNumber = 1;
-
-  for (let km = 50; km < route.distanceKm; km += 50) {
-    const [lat, lng] = pointAtDistance(route.coordinates, km);
-
-    checkpoints.push([
-      shipmentId,
-      checkpointNumber++,
-      km,
-      lat,
-      lng,
-    ]);
-  }
-
-  if (checkpoints.length) {
-    const placeholders = checkpoints
-      .map(() => "(?, ?, ?, ?, ?)")
-      .join(", ");
-
-    await pool.query(
-      `INSERT IGNORE INTO tracking_checkpoints
-        (id_envio, numero_checkpoint, distancia_acumulada_km,
-        latitud, longitud)
-      VALUES ${placeholders}`,
-      checkpoints.flat()
-    );
-  }
+  // Create checkpoints for the new tracking session.
+  await ensureTrackingCheckpoints(
+    shipmentId,
+    route.coordinates,
+    route.distanceKm
+  );
 }
 
 export async function recalculateAvoiding(
@@ -285,3 +292,4 @@ export async function recalculateAvoiding(
 
   return getRoadRoute(currentPosition, destination, polygon);
 }
+

@@ -12,6 +12,7 @@ const links = [
   ["Aprobaciones", "/aprobaciones"],
   ["Usuarios", "/usuarios"],
   ["Seguimiento", "/tracking"],
+  ["Auditoría", "/auditoria"],
 ];
 
 export default function Sidebar() {
@@ -48,4 +49,3 @@ export default function Sidebar() {
     </aside>
   );
 }
-

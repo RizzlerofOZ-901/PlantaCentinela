@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import pool from "@/app/lib/db";
+import { logAuditEvent } from "@/app/lib/mongodb";
 import {
   getPositionOnRoute,
   initializeTracking,
@@ -132,7 +133,7 @@ export async function POST(request: NextRequest, { params }: Context) {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute<RowDataPacket[]>(
-      `SELECT s.*, e.nombre_cliente, e.estatus_general
+      `SELECT s.*, e.codigo_envio, e.nombre_cliente, e.estatus_general
        FROM tracking_sessions s
        INNER JOIN envios e ON e.id_envio = s.id_envio
        WHERE s.id_envio = ? FOR UPDATE`,
@@ -204,6 +205,10 @@ export async function POST(request: NextRequest, { params }: Context) {
         blockedPoint
       );
 
+      const incidentText = String(
+        body.incident || "Carretera bloqueada"
+      ).slice(0, 120);
+
       await connection.execute(
         `UPDATE tracking_sessions
          SET ruta_activa = ?, distancia_total_km = ?,
@@ -214,7 +219,7 @@ export async function POST(request: NextRequest, { params }: Context) {
           JSON.stringify(detour.coordinates),
           detour.distanceKm,
           detour.durationMinutes,
-          String(body.incident || "Carretera bloqueada").slice(0, 120),
+          incidentText,
           id,
         ]
       );
@@ -228,6 +233,17 @@ export async function POST(request: NextRequest, { params }: Context) {
       );
 
       await connection.commit();
+
+      await logAuditEvent({
+        modulo: "TRACKING",
+        accion: "INCIDENTE_DESVIO",
+        id_envio: id,
+        codigo_envio: String(session.codigo_envio),
+        actor: "Simulador de Ruta",
+        estatus: "DESVIO",
+        actualizacion: `Incidente reportado: ${incidentText} (Ruta recalculada)`,
+      });
+
       return NextResponse.json({ recalculated: true });
     }
 
@@ -245,9 +261,7 @@ export async function POST(request: NextRequest, { params }: Context) {
       [id]
     );
 
-    if (
-      Number(tickRows[0]?.elapsed ?? 0) < ADVANCE_INTERVAL_SECONDS
-    ) {
+    if (Number(tickRows[0]?.elapsed ?? 0) < ADVANCE_INTERVAL_SECONDS) {
       await connection.commit();
       return NextResponse.json({ advanced: false });
     }
@@ -264,6 +278,16 @@ export async function POST(request: NextRequest, { params }: Context) {
            estado = IF(? >= distancia_total_km, 'ENTREGADO', 'ACTIVO')
        WHERE id_envio = ?`,
       [nextProgress, nextProgress, id]
+    );
+
+    // Capture checkpoints that are about to become ALCANZADO for MongoDB audit.
+    const [reachedCheckpoints] = await connection.execute<RowDataPacket[]>(
+      `SELECT numero_checkpoint, distancia_acumulada_km, ubicacion
+       FROM tracking_checkpoints
+       WHERE id_envio = ? AND estatus = 'PENDIENTE'
+         AND distancia_acumulada_km <= ?
+       ORDER BY numero_checkpoint ASC`,
+      [id, nextProgress]
     );
 
     // Any pending checkpoint passed by this movement becomes reached.
@@ -289,6 +313,33 @@ export async function POST(request: NextRequest, { params }: Context) {
 
     await connection.commit();
 
+    // Log newly reached checkpoints to MongoDB.
+    for (const cp of reachedCheckpoints) {
+      const kmText = Number(cp.distancia_acumulada_km).toFixed(1);
+      await logAuditEvent({
+        modulo: "TRACKING",
+        accion: "CHECKPOINT_ALCANZADO",
+        id_envio: id,
+        codigo_envio: String(session.codigo_envio),
+        actor: "Simulador de Ruta",
+        estatus: "ALCANZADO",
+        actualizacion: `Checkpoint ${cp.numero_checkpoint}. ${kmText} km · ALCANZADO`,
+      });
+    }
+
+    // Log final delivery to MongoDB.
+    if (nextProgress >= total) {
+      await logAuditEvent({
+        modulo: "TRACKING",
+        accion: "ENVIO_ENTREGADO",
+        id_envio: id,
+        codigo_envio: String(session.codigo_envio),
+        actor: "Simulador de Ruta",
+        estatus: "ENTREGADO",
+        actualizacion: `Entrega completada en destino (${total.toFixed(1)} km) · ENTREGADO`,
+      });
+    }
+
     return NextResponse.json({
       advanced: true,
       progressKm: nextProgress,
@@ -307,4 +358,3 @@ export async function POST(request: NextRequest, { params }: Context) {
     connection.release();
   }
 }
-

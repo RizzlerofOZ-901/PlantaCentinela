@@ -211,8 +211,11 @@ export async function POST(request: NextRequest, { params }: Context) {
     }
 
     // Máximo un avance por ventana de 4 segundos entre todas las pestañas.
-    const [tickRows] = await connection.query<RowDataPacket[]>(
-      "SELECT TIMESTAMPDIFF(SECOND, ultimo_avance, NOW()) AS elapsed"
+    const [tickRows] = await connection.execute<RowDataPacket[]>(
+      `SELECT TIMESTAMPDIFF(SECOND, ultimo_avance, NOW()) AS elapsed
+      FROM tracking_sessions
+      WHERE id_envio = ?`,
+      [id]
     );
 
     if (Number(tickRows[0]?.elapsed ?? 0) < 4) {

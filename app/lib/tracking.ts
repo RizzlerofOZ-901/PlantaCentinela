@@ -54,7 +54,7 @@ async function getRoadRoute(
   }
 
   const response = await fetch(
-    "https://api.heigit.org/v2/directions/driving-car/geojson",
+    "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson",
     {
       method: "POST",
       headers: {
@@ -66,13 +66,24 @@ async function getRoadRoute(
     }
   );
 
-  const result = await response.json();
+  const responseText = await response.text();
 
-  if (!response.ok) {
-    throw new Error(
-      result?.error?.message || "El proveedor de rutas no pudo calcular el recorrido."
-    );
-  }
+let result: any;
+
+try {
+  result = JSON.parse(responseText);
+} catch {
+  throw new Error(
+    `HeiGIT devolvió una respuesta que no es JSON. HTTP ${response.status}. Respuesta: ${responseText.slice(0, 300)}`
+  );
+}
+
+if (!response.ok) {
+  throw new Error(
+    result?.error?.message ||
+    `Error de HeiGIT: HTTP ${response.status}`
+  );
+}
 
   const feature = result.features?.[0];
   const raw: number[][] = feature?.geometry?.coordinates ?? [];

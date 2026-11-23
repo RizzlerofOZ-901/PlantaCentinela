@@ -227,7 +227,7 @@ export default function InicioPage() {
           <table>
             <thead>
               <tr>
-                <th>Código</th>
+                <th>Envío</th>
                 <th>Cliente</th>
                 <th>Trailer</th>
                 <th>Fecha Entrega</th>

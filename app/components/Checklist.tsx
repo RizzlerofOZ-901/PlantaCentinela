@@ -187,7 +187,7 @@ export default function Checklist({ kind }: { kind: Kind }) {
         <table>
           <thead>
             <tr>
-              <th>Código</th>
+              <th>Envío</th>
               <th>Cliente</th>
               <th>Trailer</th>
               <th>Estado general</th>

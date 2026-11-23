@@ -4,5 +4,26 @@ type U=Record<string,unknown>;
 const roles=["OPERADOR","SUPERVISOR","AUDITOR"],deps=["ALMACEN","TRAFICO","EMBARQUES","INSPECCION","ADMINISTRACION"];
 export default function Page(){const [rows,setRows]=useState<U[]>([]),[show,setShow]=useState(false),[msg,setMsg]=useState(""),[f,setF]=useState({nombre_completo:"",correo:"",clave:"",rol:"OPERADOR",departamento:"ALMACEN"});async function load(){setRows(await fetch("/api/operaciones/usuarios").then(r=>r.json()));}useEffect(()=>{load().catch(()=>setMsg("Error cargando usuarios"));},[]);
 function change(e:React.ChangeEvent<HTMLInputElement|HTMLSelectElement>){setF({...f,[e.target.name]:e.target.value});}async function save(e:React.FormEvent){e.preventDefault();const r=await fetch("/api/operaciones/usuarios",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(f)}),d=await r.json();setMsg(r.ok?"Usuario creado":d.error);if(r.ok){setShow(false);setF({...f,nombre_completo:"",correo:"",clave:""});await load();}}
-return <section><header><h1>Usuarios</h1><button onClick={()=>setShow(!show)}>+ Crear usuario</button></header>{msg&&<p className="message">{msg}</p>}{show&&<form className="panel" onSubmit={save}><div className="formgrid"><label className="field">Nombre<input required name="nombre_completo" value={f.nombre_completo} onChange={change}/></label><label className="field">Correo<input required type="email" name="correo" value={f.correo} onChange={change}/></label><label className="field">Contraseña inicial<input required minLength={8} type="password" name="clave" value={f.clave} onChange={change}/></label><label className="field">Rol<select name="rol" value={f.rol} onChange={change}>{roles.map(x=><option key={x}>{x}</option>)}</select></label><label className="field">Departamento<select name="departamento" value={f.departamento} onChange={change}>{deps.map(x=><option key={x}>{x}</option>)}</select></label></div><p><button>Guardar usuario</button></p></form>}<div className="panel"><table><thead><tr>{["ID","Nombre","Correo","Rol","Departamento","Activo","Creación"].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{rows.map(r=><tr key={String(r.id_usuario)}>{["id_usuario","nombre_completo","correo","rol","departamento","activo","fecha_creacion"].map(k=><td key={k}>{String(r[k]??"")}</td>)}</tr>)}</tbody></table></div></section>;}
+return <section><header><h1>Usuarios</h1><button onClick={()=>setShow(!show)}>+ Crear usuario</button></header>{msg&&<p className="message">{msg}</p>}{show&&<form className="panel" onSubmit={save}><div className="formgrid"><label className="field">Nombre<input required name="nombre_completo" value={f.nombre_completo} onChange={change}/></label><label className="field">Correo<input required type="email" name="correo" value={f.correo} onChange={change}/></label><label className="field">Contraseña inicial<input required minLength={8} type="password" name="clave" value={f.clave} onChange={change}/></label><label className="field">Rol<select name="rol" value={f.rol} onChange={change}>{roles.map(x=><option key={x}>{x}</option>)}</select></label><label className="field">Departamento<select name="departamento" value={f.departamento} onChange={change}>{deps.map(x=><option key={x}>{x}</option>)}</select></label></div><p><button>Guardar usuario</button></p></form>}
+<div className="panel responsive-table">
+  <table>
+    <thead>
+      <tr>
+        {["ID", "Nombre", "Correo", "Rol", "Departamento", "Activo", "Creación"].map((x) => (
+          <th key={x}>{x}</th>
+        ))}
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((r) => (
+        <tr key={String(r.id_usuario)}>
+          {["id_usuario", "nombre_completo", "correo", "rol", "departamento", "activo", "fecha_creacion"].map((k) => (
+            <td key={k}>{String(r[k] ?? "")}</td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+</section>;}
 

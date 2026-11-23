@@ -1,6 +1,3 @@
-// import { redirect } from "next/navigation";
-// export default function Home() { redirect("/envios"); }
-
 import Link from "next/link";
 
 export default function SignInPage() {
@@ -21,10 +18,21 @@ export default function SignInPage() {
 
       <div className="login-content">
         <div className="login-box">
-          <h1 className="login-title">Inicio de Sesión</h1>
-          <span className="login-subtitle">
-            Sistema Integral de Logística y Control de Embarques
-          </span>
+          <div className="login-header-row">
+            <div className="login-emblem">
+              <img
+                src="/imagenes/icono.png"
+                alt="Icono Planta Centinela"
+                className="login-top-icon"
+              />
+            </div>
+            <div>
+              <h1 className="login-title">Inicio de Sesión</h1>
+              <span className="login-subtitle" style={{ marginBottom: 0 }}>
+                Sistema Integral de Logística y Control de Embarques
+              </span>
+            </div>
+          </div>
 
           <p style={{ color: "#bfd6ee", marginBottom: "28px", lineHeight: 1.5 }}>
             Bienvenido a la plataforma operativa de Planta Centinela. Presiona el
@@ -37,7 +45,11 @@ export default function SignInPage() {
         </div>
 
         <div className="login-brand-panel">
-          <h2>PLANTA CENTINELA</h2>
+          <img
+            src="/imagenes/logo-login.png"
+            alt="Planta Centinela"
+            className="login-brand-right"
+          />
           <p style={{ fontWeight: 600, margin: 0 }}>
             Monitoreo de Envíos, Rutas y Operaciones
           </p>

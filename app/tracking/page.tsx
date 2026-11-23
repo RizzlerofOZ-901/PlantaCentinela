@@ -374,7 +374,7 @@ export default function TrackingPage() {
         <table>
           <thead>
             <tr>
-              <th>Código</th>
+              <th>Envío</th>
               <th>Cliente</th>
               <th>Trailer</th>
               <th>Estado</th>

@@ -20,7 +20,13 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div>
-        <h2>Planta Centinela</h2>
+        <div className="sidebar-logo-wrap">
+          <img
+            src="/imagenes/logo-sidebar.png"
+            alt="Planta Centinela"
+            className="sidebar-logo"
+          />
+        </div>
         <nav aria-label="Navegación principal">
           {links.map(([name, href]) => (
             <Link
@@ -42,3 +48,4 @@ export default function Sidebar() {
     </aside>
   );
 }
+

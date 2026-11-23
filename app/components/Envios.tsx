@@ -96,7 +96,7 @@ export default function Envios() {
           {users.filter(u => Number(u.activo) === 1 || u.activo === true).map(u => <option key={u.id_usuario} value={u.id_usuario}>{u.nombre_completo}</option>)}</select></label>
       </div><p><button type="submit" disabled={loading}>{loading ? "Guardando..." : "Guardar envío"}</button> <button type="button" className="secondary" onClick={() => setShowForm(false)} disabled={loading}>Cancelar</button></p>
     </form>}
-    <div className="panel responsive-table"><table><thead><tr><th>Código</th><th>Cliente</th><th>Trailer</th><th>Estado general</th><th>Despacho</th><th>Entrega</th><th>Creador</th></tr></thead><tbody>
+    <div className="panel responsive-table"><table><thead><tr><th> Envío</th><th>Cliente</th><th>Trailer</th><th>Estado general</th><th>Despacho</th><th>Entrega</th><th>Creador</th></tr></thead><tbody>
       {rows.map(r => <tr key={r.id_envio}><td>{show(r.codigo_envio)}</td><td>{show(r.nombre_cliente)}</td><td>{show(r.codigo_trailer)}</td>
         <td><span className="status-pill">{statusLabel(r.estatus_general)}</span></td><td>{date(r.fecha_despacho_programada)}</td><td>{date(r.fecha_entrega_estimada)}</td><td>{show(r.creador_nombre)}</td></tr>)}
       {!rows.length && <tr><td colSpan={7}>Todavía no hay envíos registrados.</td></tr>}

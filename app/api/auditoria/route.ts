@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuditDb } from "@/app/lib/mongodb";
 
-export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const idEnvioParam = searchParams.get("id_envio");
-    const moduloParam = searchParams.get("modulo");
+export const dynamic = "force-dynamic";
 
+export async function GET(request: NextRequest) {
+  const idEnvioParam = request.nextUrl.searchParams.get("id_envio");
+  const moduloParam = request.nextUrl.searchParams.get("modulo");
+
+  try {
     const db = await getAuditDb();
     const filter: Record<string, unknown> = {};
 
     if (idEnvioParam) {
       const idEnvio = Number(idEnvioParam);
       if (!Number.isInteger(idEnvio) || idEnvio <= 0) {
-        return NextResponse.json({ error: "id_envio inválido." }, { status: 400 });
+        return NextResponse.json(
+          { error: "id_envio inválido." },
+          { status: 400 }
+        );
       }
       filter.id_envio = idEnvio;
     }
@@ -33,7 +37,10 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("GET /api/auditoria error:", error);
     return NextResponse.json(
-      { error: "No se pudo consultar la auditoría en MongoDB." },
+      {
+        error: "No se pudo consultar la auditoría en MongoDB.",
+        detail: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }

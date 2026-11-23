@@ -3,11 +3,16 @@ import type { RowDataPacket } from "mysql2";
 import pool from "@/app/lib/db";
 import {
   getPositionOnRoute,
+  initializeTracking,
   recalculateAvoiding,
   type LatLng,
 } from "@/app/lib/tracking";
 
 type Context = { params: Promise<{ id: string }> };
+
+// Simulation settings.
+const ADVANCE_INTERVAL_SECONDS = 2;
+const ADVANCE_DISTANCE_KM = 25;
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -15,17 +20,25 @@ function jsonError(message: string, status = 400) {
 
 function parseRoute(value: unknown): LatLng[] {
   const parsed = typeof value === "string" ? JSON.parse(value) : value;
-  if (!Array.isArray(parsed)) throw new Error("Geometría de ruta inválida.");
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Geometría de ruta inválida.");
+  }
+
   return parsed as LatLng[];
 }
 
 export async function GET(_request: NextRequest, { params }: Context) {
   const id = Number((await params).id);
+
   if (!Number.isInteger(id) || id <= 0) {
     return jsonError("ID de envío inválido.");
   }
 
   try {
+    // This also repairs missing checkpoints for sessions created previously.
+    await initializeTracking(id);
+
     const [rows] = await pool.execute<RowDataPacket[]>(
       `SELECT s.*, e.codigo_envio, e.nombre_cliente, e.codigo_trailer,
               e.estatus_general, e.fecha_despacho_real,
@@ -38,7 +51,10 @@ export async function GET(_request: NextRequest, { params }: Context) {
     );
 
     if (!rows.length) {
-      return jsonError("Este envío no tiene una sesión de tracking inicializada.", 404);
+      return jsonError(
+        "Este envío no tiene una sesión de tracking inicializada.",
+        404
+      );
     }
 
     const session = rows[0];
@@ -87,7 +103,9 @@ export async function GET(_request: NextRequest, { params }: Context) {
   } catch (error) {
     console.error("Tracking GET error:", error);
     return jsonError(
-      error instanceof Error ? error.message : "No se pudo consultar el tracking.",
+      error instanceof Error
+        ? error.message
+        : "No se pudo consultar el tracking.",
       500
     );
   }
@@ -95,11 +113,13 @@ export async function GET(_request: NextRequest, { params }: Context) {
 
 export async function POST(request: NextRequest, { params }: Context) {
   const id = Number((await params).id);
+
   if (!Number.isInteger(id) || id <= 0) {
     return jsonError("ID de envío inválido.");
   }
 
   let body: { action?: string; checkpointId?: number; incident?: string };
+
   try {
     body = await request.json();
   } catch {
@@ -121,12 +141,18 @@ export async function POST(request: NextRequest, { params }: Context) {
 
     if (!rows.length) {
       await connection.rollback();
-      return jsonError("No existe una sesión de tracking para este envío.", 404);
+      return jsonError(
+        "No existe una sesión de tracking para este envío.",
+        404
+      );
     }
 
     const session = rows[0];
 
-    if (session.estado !== "ACTIVO" || session.estatus_general !== "EN_TRANSITO") {
+    if (
+      session.estado !== "ACTIVO" ||
+      session.estatus_general !== "EN_TRANSITO"
+    ) {
       await connection.commit();
       return NextResponse.json({ finished: true });
     }
@@ -171,7 +197,7 @@ export async function POST(request: NextRequest, { params }: Context) {
         return jsonError("No hay destino configurado para este cliente.");
       }
 
-      // El nuevo tramo comienza en la posición actual del camión.
+      // The new route starts at the truck's current position.
       const detour = await recalculateAvoiding(
         currentPosition,
         destinationEntry[1],
@@ -210,22 +236,25 @@ export async function POST(request: NextRequest, { params }: Context) {
       return jsonError("Acción no válida.");
     }
 
-    // Máximo un avance por ventana de 4 segundos entre todas las pestañas.
+    // Only one successful advance is allowed per shipment every 2 seconds.
+    // The row lock above prevents multiple tabs from advancing simultaneously.
     const [tickRows] = await connection.execute<RowDataPacket[]>(
       `SELECT TIMESTAMPDIFF(SECOND, ultimo_avance, NOW()) AS elapsed
-      FROM tracking_sessions
-      WHERE id_envio = ?`,
+       FROM tracking_sessions
+       WHERE id_envio = ?`,
       [id]
     );
 
-    if (Number(tickRows[0]?.elapsed ?? 0) < 4) {
+    if (
+      Number(tickRows[0]?.elapsed ?? 0) < ADVANCE_INTERVAL_SECONDS
+    ) {
       await connection.commit();
       return NextResponse.json({ advanced: false });
     }
 
     const total = Number(session.distancia_total_km);
     const nextProgress = Math.min(
-      Number(session.distancia_avance_km) + 1,
+      Number(session.distancia_avance_km) + ADVANCE_DISTANCE_KM,
       total
     );
 
@@ -237,6 +266,7 @@ export async function POST(request: NextRequest, { params }: Context) {
       [nextProgress, nextProgress, id]
     );
 
+    // Any pending checkpoint passed by this movement becomes reached.
     await connection.execute(
       `UPDATE tracking_checkpoints
        SET estatus = 'ALCANZADO', fecha_registro = NOW(),
@@ -246,6 +276,7 @@ export async function POST(request: NextRequest, { params }: Context) {
       [id, nextProgress]
     );
 
+    // Reaching the route's total distance completes the shipment.
     if (nextProgress >= total) {
       await connection.execute(
         `UPDATE envios
@@ -267,10 +298,13 @@ export async function POST(request: NextRequest, { params }: Context) {
     await connection.rollback();
     console.error("Tracking POST error:", error);
     return jsonError(
-      error instanceof Error ? error.message : "No se pudo actualizar el tracking.",
+      error instanceof Error
+        ? error.message
+        : "No se pudo actualizar el tracking.",
       500
     );
   } finally {
     connection.release();
   }
 }
+

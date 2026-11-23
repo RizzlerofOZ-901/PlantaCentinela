@@ -84,8 +84,7 @@ async function getRoadRoute(
 
   if (!response.ok) {
     throw new Error(
-      result?.error?.message ||
-        `Error de HeiGIT: HTTP ${response.status}`
+      result?.error?.message || `Error de HeiGIT: HTTP ${response.status}`
     );
   }
 
@@ -103,7 +102,8 @@ async function getRoadRoute(
       (point) => [Number(point[1]), Number(point[0])] as LatLng
     ),
     distanceKm: Number(feature.properties?.summary?.distance ?? 0) / 1000,
-    durationMinutes: Number(feature.properties?.summary?.duration ?? 0) / 60,
+    durationMinutes:
+      Number(feature.properties?.summary?.duration ?? 0) / 60,
   };
 }
 
@@ -152,14 +152,21 @@ function pointAtDistance(route: LatLng[], targetKm: number): LatLng {
   return route[route.length - 1];
 }
 
-// Creates any missing checkpoints without duplicating existing ones.
+// Creates missing checkpoints without duplicating existing ones.
 async function ensureTrackingCheckpoints(
   shipmentId: number,
   routeCoordinates: LatLng[],
   distanceKm: number
 ): Promise<void> {
-  const checkpoints: Array<[number, number, number, number, number]> = [];
+  if (!Array.isArray(routeCoordinates) || routeCoordinates.length < 2) {
+    throw new Error("No se puede crear checkpoints: la ruta original no es válida.");
+  }
 
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+    throw new Error("No se puede crear checkpoints: la distancia de ruta no es válida.");
+  }
+
+  const checkpoints: Array<[number, number, number, number, number]> = [];
   let checkpointNumber = 1;
 
   for (let km = 50; km < distanceKm; km += 50) {
@@ -198,10 +205,8 @@ export function getPositionOnRoute(
   return pointAtDistance(route, targetKm);
 }
 
-export async function initializeTracking(
-  shipmentId: number
-): Promise<void> {
-  // Check whether a tracking session already exists.
+export async function initializeTracking(shipmentId: number): Promise<void> {
+  // First check whether this shipment already has a tracking session.
   const [existing] = await pool.execute<RowDataPacket[]>(
     `SELECT id_tracking, ruta_original, distancia_total_km
      FROM tracking_sessions
@@ -210,7 +215,8 @@ export async function initializeTracking(
     [shipmentId]
   );
 
-  // If it exists, repair missing checkpoints using its original route.
+  // Existing sessions are repaired: missing checkpoints are inserted.
+  // INSERT IGNORE prevents duplicate checkpoint rows.
   if (existing.length) {
     const storedRoute =
       typeof existing[0].ruta_original === "string"
@@ -226,7 +232,7 @@ export async function initializeTracking(
     return;
   }
 
-  // Retrieve shipment information if no tracking session exists.
+  // No session exists, so retrieve the shipment information.
   const [rows] = await pool.execute<RowDataPacket[]>(
     `SELECT id_envio, nombre_cliente, estatus_general
      FROM envios
@@ -239,15 +245,14 @@ export async function initializeTracking(
     throw new Error("No se encontró el envío.");
   }
 
+  // A tracking session is created only after the shipment enters transit.
   if (rows[0].estatus_general !== "EN_TRANSITO") {
     return;
   }
 
-  // Calculate the original road route.
   const destination = destinationFor(String(rows[0].nombre_cliente));
   const route = await getRoadRoute(ORIGIN, destination);
 
-  // Create the tracking session.
   await pool.query(
     `INSERT IGNORE INTO tracking_sessions
       (id_envio, ruta_original, ruta_activa, distancia_total_km,
@@ -262,7 +267,6 @@ export async function initializeTracking(
     ]
   );
 
-  // Create checkpoints for the new tracking session.
   await ensureTrackingCheckpoints(
     shipmentId,
     route.coordinates,
@@ -275,7 +279,7 @@ export async function recalculateAvoiding(
   destination: LatLng,
   blockedPoint: LatLng
 ): Promise<RouteResult> {
-  // Polígono pequeño alrededor del punto seleccionado como cierre simulado.
+  // Small polygon around the selected point, used as a simulated road closure.
   const latDelta = 0.008;
   const lngDelta = 0.008;
 

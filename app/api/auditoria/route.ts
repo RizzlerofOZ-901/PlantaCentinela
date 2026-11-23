@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuditDb } from "@/app/lib/mongodb";
 
-export const dynamic = "force-dynamic";
-
 export async function GET(request: NextRequest) {
   const idEnvioParam = request.nextUrl.searchParams.get("id_envio");
   const moduloParam = request.nextUrl.searchParams.get("modulo");

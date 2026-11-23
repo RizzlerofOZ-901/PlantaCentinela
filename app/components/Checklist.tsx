@@ -92,6 +92,16 @@ export default function Checklist({ kind }: { kind: Kind }) {
     load().catch((e) => setMsg(e.message));
   }, [endpoint]);
 
+  // Close modal with Escape key
+  useEffect(() => {
+    if (expanded === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
+
   const latest = useMemo(() => {
     const m = new Map<number, Eval>();
     for (const r of records) {
@@ -104,7 +114,7 @@ export default function Checklist({ kind }: { kind: Kind }) {
   }, [records]);
 
   function open(id: number) {
-    setExpanded(expanded === id ? null : id);
+    setExpanded(id);
     setUid("");
     setChecks({});
     setNotes("");
@@ -154,94 +164,23 @@ export default function Checklist({ kind }: { kind: Kind }) {
     }
   }
 
+  const activeShipment =
+    expanded !== null
+      ? ship.find((s) => s.id_envio === expanded) ?? null
+      : null;
+
   return (
     <section>
       <header>
         <div>
           <h1>{isRisk ? "Riesgos de ruta" : "Inspección de mercancía"}</h1>
           <p className="muted">
-            Selecciona un envío de la tabla para abrir su evaluación en la parte
-            superior.
+            Selecciona un envío de la tabla para abrir su evaluación.
           </p>
         </div>
       </header>
 
       {msg && <p className="message">{msg}</p>}
-
-      {/* EXPANDED CHECKBOX FORM MOVED ABOVE THE TABLE */}
-      {expanded !== null && (
-        <form className="centinela-card detail-panel" onSubmit={save}>
-          <div className="detail-heading">
-            <h2>
-              {ship.find((s) => s.id_envio === expanded)?.codigo_envio} —{" "}
-              {isRisk ? "Evaluación de ruta" : "Inspección de carga"}
-            </h2>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setExpanded(null)}
-            >
-              Cerrar
-            </button>
-          </div>
-
-          <label className="field">
-            Inspector / evaluador
-            <select
-              value={uid}
-              onChange={(e) => setUid(e.target.value)}
-              required
-            >
-              <option value="">Seleccionar inspector activo</option>
-              {inspectors.map((u) => (
-                <option key={u.id_usuario} value={u.id_usuario}>
-                  {u.nombre_completo}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {!inspectors.length && (
-            <p className="muted">
-              No hay usuarios activos en el departamento INSPECCION. Activa o
-              asigna un usuario a ese departamento.
-            </p>
-          )}
-
-          <h3>Checklist</h3>
-          <div className="checks">
-            {fields.map(([key, label]) => (
-              <label key={key}>
-                <input
-                  type="checkbox"
-                  checked={!!checks[key]}
-                  onChange={(e) =>
-                    setChecks((old) => ({ ...old, [key]: e.target.checked }))
-                  }
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-
-          <label className="field">
-            Observaciones
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </label>
-
-          <p className="muted">
-            El estado general cambia automáticamente a CARGANDO al guardar una
-            evaluación, salvo que el envío ya esté en tránsito o entregado.
-          </p>
-
-          <button disabled={saving || !inspectors.length}>
-            {saving ? "Guardando..." : "Guardar evaluación"}
-          </button>
-        </form>
-      )}
 
       {/* SHIPMENTS TABLE */}
       <div className="panel responsive-table">
@@ -296,8 +235,107 @@ export default function Checklist({ kind }: { kind: Kind }) {
           </tbody>
         </table>
       </div>
+
+      {/* MODAL OVERLAY IN FRONT OF THE TABLE */}
+      {expanded !== null && activeShipment && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setExpanded(null)}
+        >
+          <form
+            className="centinela-card detail-panel modal-dialog"
+            onSubmit={save}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="detail-heading">
+              <div>
+                <h2>
+                  {activeShipment.codigo_envio} —{" "}
+                  {isRisk ? "Evaluación de ruta" : "Inspección de carga"}
+                </h2>
+                <p style={{ margin: "4px 0 0", fontWeight: 600 }}>
+                  Cliente: {activeShipment.nombre_cliente}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setExpanded(null)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <label className="field">
+              Inspector / evaluador
+              <select
+                value={uid}
+                onChange={(e) => setUid(e.target.value)}
+                required
+              >
+                <option value="">Seleccionar inspector activo</option>
+                {inspectors.map((u) => (
+                  <option key={u.id_usuario} value={u.id_usuario}>
+                    {u.nombre_completo}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {!inspectors.length && (
+              <p className="muted">
+                No hay usuarios activos en el departamento INSPECCION. Activa o
+                asigna un usuario a ese departamento.
+              </p>
+            )}
+
+            <h3>Checklist</h3>
+            <div className="checks">
+              {fields.map(([key, label]) => (
+                <label key={key}>
+                  <input
+                    type="checkbox"
+                    checked={!!checks[key]}
+                    onChange={(e) =>
+                      setChecks((old) => ({ ...old, [key]: e.target.checked }))
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+
+            <label className="field">
+              Observaciones
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </label>
+
+            <p className="muted">
+              El estado general cambia automáticamente a CARGANDO al guardar una
+              evaluación, salvo que el envío ya esté en tránsito o entregado.
+            </p>
+
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button type="submit" disabled={saving || !inspectors.length}>
+                {saving ? "Guardando..." : "Guardar evaluación"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setExpanded(null)}
+                disabled={saving}
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </section>
   );
 }
-
-

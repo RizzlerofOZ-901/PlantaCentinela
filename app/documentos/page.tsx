@@ -78,6 +78,16 @@ export default function Page() {
     load().catch((e) => setMsg(e.message));
   }, []);
 
+  // Close modal with Escape key
+  useEffect(() => {
+    if (expanded === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
+
   const grouped = useMemo(() => {
     const m = new Map<number, Doc[]>();
     docs.forEach((d) => m.set(d.id_envio, [...(m.get(d.id_envio) || []), d]));
@@ -145,6 +155,7 @@ export default function Page() {
           );
       }
       await load();
+      setExpanded(null);
       setMsg("Cambios guardados.");
     } catch (e) {
       setMsg(
@@ -155,14 +166,18 @@ export default function Page() {
     }
   }
 
+  const activeShipment =
+    expanded !== null
+      ? shipments.find((s) => s.id_envio === expanded) ?? null
+      : null;
+
   return (
     <section>
       <header>
         <div>
           <h1>Documentos</h1>
           <p className="muted">
-            Selecciona un envío de la tabla para marcar sus documentos en la
-            parte superior.
+            Selecciona un envío de la tabla para abrir su checklist documental.
           </p>
         </div>
       </header>
@@ -180,75 +195,6 @@ export default function Page() {
         </p>
       )}
 
-      {/* EXPANDED CHECKBOX PANEL MOVED ABOVE THE TABLE */}
-      {expanded !== null && (
-        <div className="centinela-card detail-panel">
-          <div className="detail-heading">
-            <div>
-              <h2>
-                Envío:{" "}
-                {shipments.find((s) => s.id_envio === expanded)?.codigo_envio}
-              </h2>
-              <p style={{ margin: "4px 0 0", fontWeight: 600 }}>
-                Cliente:{" "}
-                {shipments.find((s) => s.id_envio === expanded)?.nombre_cliente}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setExpanded(null)}
-            >
-              Cerrar
-            </button>
-          </div>
-
-          <p className="muted">
-            Los cambios permanecen pendientes hasta presionar Guardar. El
-            estatus será LISTO cuando los cuatro documentos estén marcados.
-          </p>
-
-          <div className="checks">
-            {order.map((type) => {
-              const d = (grouped.get(expanded) || []).find(
-                (x) => x.tipo_documento === type
-              );
-              return (
-                <label key={type}>
-                  <input
-                    type="checkbox"
-                    checked={!!d && currentValue(d) === "LISTO"}
-                    disabled={!d || loading}
-                    onChange={(e) => d && setDocument(d, e.target.checked)}
-                  />
-                  {label(type)}
-                  {d &&
-                  draft[d.id_documento] !== undefined &&
-                  draft[d.id_documento] !== d.estatus_documento
-                    ? " (Pendiente)"
-                    : ""}
-                </label>
-              );
-            })}
-          </div>
-
-          <p>
-            <strong>Estatus documental: </strong>
-            <span className={statusClass(status(expanded))}>
-              {label(status(expanded))}
-            </span>
-          </p>
-
-          <button
-            type="button"
-            onClick={save}
-            disabled={loading || !changedForShipment(expanded)}
-          >
-            {loading ? "Guardando..." : "Guardar"}
-          </button>
-        </div>
-      )}
-
       {/* SHIPMENTS TABLE */}
       <div className="panel responsive-table">
         <table>
@@ -264,9 +210,7 @@ export default function Page() {
             {shipments.map((s) => (
               <tr
                 key={s.id_envio}
-                onClick={() =>
-                  setExpanded(s.id_envio === expanded ? null : s.id_envio)
-                }
+                onClick={() => setExpanded(s.id_envio)}
                 className={expanded === s.id_envio ? "selected-row" : ""}
                 style={{ cursor: "pointer" }}
               >
@@ -276,7 +220,7 @@ export default function Page() {
                     className="table-link"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setExpanded(s.id_envio === expanded ? null : s.id_envio);
+                      setExpanded(s.id_envio);
                     }}
                   >
                     {s.codigo_envio}
@@ -299,6 +243,91 @@ export default function Page() {
           </tbody>
         </table>
       </div>
+
+      {/* MODAL OVERLAY IN FRONT OF THE TABLE */}
+      {expanded !== null && activeShipment && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setExpanded(null)}
+        >
+          <div
+            className="centinela-card detail-panel modal-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="detail-heading">
+              <div>
+                <h2>Envío: {activeShipment.codigo_envio}</h2>
+                <p style={{ margin: "4px 0 0", fontWeight: 600 }}>
+                  Cliente: {activeShipment.nombre_cliente}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setExpanded(null)}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <p className="muted">
+              Los cambios permanecen pendientes hasta presionar Guardar. El
+              estatus será LISTO cuando los cuatro documentos estén marcados.
+            </p>
+
+            <div className="checks">
+              {order.map((type) => {
+                const d = (grouped.get(expanded) || []).find(
+                  (x) => x.tipo_documento === type
+                );
+                return (
+                  <label key={type}>
+                    <input
+                      type="checkbox"
+                      checked={!!d && currentValue(d) === "LISTO"}
+                      disabled={!d || loading}
+                      onChange={(e) => d && setDocument(d, e.target.checked)}
+                    />
+                    {label(type)}
+                    {d &&
+                    draft[d.id_documento] !== undefined &&
+                    draft[d.id_documento] !== d.estatus_documento
+                      ? " (Pendiente)"
+                      : ""}
+                  </label>
+                );
+              })}
+            </div>
+
+            <p>
+              <strong>Estatus documental: </strong>
+              <span className={statusClass(status(expanded))}>
+                {label(status(expanded))}
+              </span>
+            </p>
+
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={save}
+                disabled={loading || !changedForShipment(expanded)}
+              >
+                {loading ? "Guardando..." : "Guardar"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setExpanded(null)}
+                disabled={loading}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

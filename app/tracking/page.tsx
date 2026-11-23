@@ -146,8 +146,6 @@ export default function TrackingPage() {
         throw new Error(data?.error || "No se pudieron cargar los envíos.");
       }
 
-      // El endpoint de operaciones devuelve normalmente un arreglo.
-      // También se admite { data: [...] } si tu API usa ese formato.
       const list: Shipment[] = Array.isArray(data)
         ? data
         : Array.isArray(data?.data)
@@ -162,8 +160,6 @@ export default function TrackingPage() {
 
       setShipments(filtered);
 
-      // No seleccionar el primer registro automáticamente.
-      // Si el envío seleccionado dejó de estar en la lista, limpiar su detalle.
       if (
         selectedId !== null &&
         !filtered.some((shipment) => shipment.id_envio === selectedId)
@@ -243,8 +239,6 @@ export default function TrackingPage() {
     }));
   }, [tracking?.checkpoints]);
 
-  // El servidor persiste el avance. Varias pestañas no incrementan
-  // simultáneamente porque la API controla el intervalo con una transacción.
   useEffect(() => {
     if (
       selectedId === null ||
@@ -394,13 +388,10 @@ export default function TrackingPage() {
               <tr
                 key={shipment.id_envio}
                 onClick={() => setSelectedId(shipment.id_envio)}
-                style={{
-                  cursor: "pointer",
-                  background:
-                    selectedId === shipment.id_envio
-                      ? "var(--selected-row, rgba(37, 99, 235, 0.08))"
-                      : undefined,
-                }}
+                className={
+                  selectedId === shipment.id_envio ? "selected-row" : ""
+                }
+                style={{ cursor: "pointer" }}
                 aria-selected={selectedId === shipment.id_envio}
               >
                 <td>
@@ -449,10 +440,11 @@ export default function TrackingPage() {
       {selected && tracking && (
         <div className="tracking-layout">
           <aside className="panel tracking-timeline">
+            {/* Compact Header */}
             <div className="detail-heading">
               <div>
-                <h2>{selected.codigo_envio}</h2>
-                <p className="muted">
+                <h2 style={{ margin: "0 0 2px" }}>{selected.codigo_envio}</h2>
+                <p className="muted" style={{ margin: 0 }}>
                   {selected.nombre_cliente} ·{" "}
                   {selected.codigo_trailer || "Sin trailer"}
                 </p>
@@ -463,60 +455,69 @@ export default function TrackingPage() {
               </span>
             </div>
 
+            {/* Responsive 2-Column Timestamps */}
             <div className="tracking-times">
-              <p>
-                <strong>Despacho programado:</strong>
-                <br />
-                {fmt(selected.fecha_despacho_programada)}
-              </p>
-              <p>
-                <strong>Despacho real:</strong>
-                <br />
-                {fmt(selected.fecha_despacho_real)}
-              </p>
-              <p>
-                <strong>Entrega programada:</strong>
-                <br />
-                {fmt(selected.fecha_entrega_estimada)}
-              </p>
-              <p>
-                <strong>Entrega real:</strong>
-                <br />
-                {fmt(selected.fecha_entrega_real)}
-              </p>
+              <div className="tracking-time-item">
+                <span className="tracking-time-label">
+                  Despacho programado:
+                </span>
+                <span className="tracking-time-value">
+                  {fmt(selected.fecha_despacho_programada)}
+                </span>
+              </div>
+
+              <div className="tracking-time-item">
+                <span className="tracking-time-label">Despacho real:</span>
+                <span className="tracking-time-value">
+                  {fmt(selected.fecha_despacho_real)}
+                </span>
+              </div>
+
+              <div className="tracking-time-item">
+                <span className="tracking-time-label">Entrega programada:</span>
+                <span className="tracking-time-value">
+                  {fmt(selected.fecha_entrega_estimada)}
+                </span>
+              </div>
+
+              <div className="tracking-time-item">
+                <span className="tracking-time-label">Entrega real:</span>
+                <span className="tracking-time-value">
+                  {fmt(selected.fecha_entrega_real)}
+                </span>
+              </div>
             </div>
 
-            <p>
-              <strong>Resultado de entrega:</strong>{" "}
-              {deliveryResult(tracking.shipment)}
-            </p>
-
-            <div className="tracking-progress">
+            {/* Compact Route Summary */}
+            <div className="tracking-summary">
+              <p>
+                <strong>Estatus de entrega:</strong>{" "}
+                {deliveryResult(tracking.shipment)}
+              </p>
               <p>
                 <strong>Progreso simulado:</strong>{" "}
                 {formatKm(tracking.session.progressKm)} /{" "}
                 {formatKm(tracking.session.distanceKm)}
               </p>
               <p>
-                <strong>Duración estimada del tramo:</strong>{" "}
+                <strong>Duración de la ruta:</strong>{" "}
                 {Math.round(tracking.session.durationMinutes)} min
               </p>
               {tracking.session.incident && (
                 <p>
-                  <strong>Incidente actual:</strong>{" "}
-                  {tracking.session.incident}
+                  <strong>Incidente actual:</strong> {tracking.session.incident}
                 </p>
               )}
-              <p className="muted">
+              <p className="muted tracking-summary-note">
                 La posición es una simulación persistida, no una lectura GPS del
                 vehículo.
               </p>
             </div>
 
-            <h3>Checkpoint de ruta</h3>
+            <h3 className="tracking-checkpoints-title">Checkpoints de ruta</h3>
 
             {tracking.checkpoints.length === 0 ? (
-              <p className="muted">
+              <p className="muted" style={{ margin: 0 }}>
                 No hay checkpoints pendientes o registrados para este envío.
               </p>
             ) : (
@@ -555,6 +556,7 @@ export default function TrackingPage() {
                           <button
                             type="button"
                             className="secondary"
+                            style={{ marginTop: "6px", padding: "6px 12px", fontSize: "12px" }}
                             disabled={incidentLoading}
                             onClick={() => simulateBlock(checkpoint)}
                           >
@@ -573,8 +575,8 @@ export default function TrackingPage() {
           <div className="panel tracking-map-panel">
             <div className="detail-heading">
               <div>
-                <h2>Mapa de ruta</h2>
-                <p className="muted">
+                <h2 style={{ margin: "0 0 2px" }}>Mapa de ruta</h2>
+                <p className="muted" style={{ margin: "0 0 12px" }}>
                   Ruta vial calculada y posición simulada del camión.
                 </p>
               </div>
@@ -593,7 +595,7 @@ export default function TrackingPage() {
               </p>
             )}
 
-            <p className="muted">
+            <p className="muted" style={{ marginBottom: 0, marginTop: "10px" }}>
               © OpenStreetMap contributors. Los incidentes son simulados; no se
               consultan cierres ni tráfico en vivo.
             </p>
@@ -603,4 +605,3 @@ export default function TrackingPage() {
     </section>
   );
 }
-

@@ -1,8 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
-import type { MapPoint } from "./TrackingMap";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const TrackingMap = dynamic(() => import("./TrackingMap"), { ssr: false });
 
@@ -21,301 +20,587 @@ type Shipment = {
   fecha_entrega_real: string | null;
 };
 
-type RouteOption = {
-  coordinates: [number, number][];
-  distanceKm?: number;
-  durationMinutes?: number;
+type Checkpoint = {
+  id_checkpoint: number;
+  numero_checkpoint: number;
+  distancia_acumulada_km: number | string;
+  latitud: number | string;
+  longitud: number | string;
+  ubicacion: string | null;
+  estatus: "PENDIENTE" | "ALCANZADO" | "BLOQUEADO" | "OMITIDO" | string;
+  fecha_registro: string | null;
+  observaciones: string | null;
+};
+
+type TrackingData = {
+  shipment: Shipment;
+  session: {
+    route: [number, number][];
+    originalRoute: [number, number][];
+    distanceKm: number;
+    progressKm: number;
+    durationMinutes: number;
+    state: string;
+    currentPosition: [number, number];
+    incident: string | null;
+  };
+  checkpoints: Checkpoint[];
+};
+
+type MapCheckpoint = {
+  id: string;
   label: string;
+  lat: number;
+  lng: number;
+  status: string;
 };
-
-type Checkpoint = MapPoint & {
-  occurredAt: Date;
-  observation: string;
-  isCurrent?: boolean;
-};
-
-// Demo corridor only: approximate city/state coordinates from Nuevo Laredo to Monterrey.
-// Replace this demo path after geocoding each shipment's actual origin and destination.
-// Coordinates are city-level approximations, not truck GPS positions.
-const DEMO_CHECKPOINTS: MapPoint[] = [
-  { id: "cp-01", label: "Nuevo Laredo, Tamaulipas", lat: 27.476, lng: -99.516 },
-  { id: "cp-02", label: "Anáhuac, Nuevo León", lat: 27.245, lng: -100.132 },
-  { id: "cp-03", label: "Lampazos de Naranjo, Nuevo León", lat: 27.025, lng: -100.510 },
-  { id: "cp-04", label: "Bustamante, Nuevo León", lat: 26.533, lng: -100.507 },
-  { id: "cp-05", label: "Sabinas Hidalgo, Nuevo León", lat: 26.505, lng: -100.181 },
-  { id: "cp-06", label: "Vallecillo, Nuevo León", lat: 26.660, lng: -99.986 },
-  { id: "cp-07", label: "Ciénega de Flores, Nuevo León", lat: 25.957, lng: -100.167 },
-  { id: "cp-08", label: "Salinas Victoria, Nuevo León", lat: 25.963, lng: -100.293 },
-  { id: "cp-09", label: "General Escobedo, Nuevo León", lat: 25.795, lng: -100.315 },
-  { id: "cp-10", label: "Monterrey, Nuevo León", lat: 25.6866, lng: -100.3161 },
-];
-
-// A second illustrative line for the button "Simular ruta alterna".
-// It is not a traffic-aware route and must be replaced by an API alternative.
-const DEMO_ALTERNATE: [number, number][] = [
-  [27.476, -99.516],
-  [27.18, -99.86],
-  [26.90, -100.25],
-  [26.65, -100.52],
-  [26.32, -100.44],
-  [26.08, -100.31],
-  [25.90, -100.35],
-  [25.79, -100.315],
-  [25.6866, -100.3161],
-];
 
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
   const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const result = new Date(normalized);
-  return Number.isNaN(result.getTime()) ? null : result;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function fmt(value: string | Date | null | undefined) {
+function fmt(value: string | Date | null | undefined): string {
   const date = value instanceof Date ? value : parseDate(value);
   if (!date) return "—";
+
   return new Intl.DateTimeFormat("es-MX", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
 }
 
-function statusClass(value: unknown) {
-  const s = String(value ?? "").toUpperCase().replaceAll(" ", "_");
-  if (["ENTREGADO", "LISTO", "APROBADO", "BUENO", "EXCELENTE"].includes(s)) return "status-pill status-green";
-  if (["EN_TRANSITO", "CARGANDO", "EN_ORIGEN", "EN_PROGRESO", "PENDIENTE"].includes(s)) return "status-pill status-yellow";
-  if (["RECHAZADO", "CANCELADO", "RETRASADO", "MALO", "RETRABAJO"].includes(s)) return "status-pill status-red";
+function statusClass(value: unknown): string {
+  const status = String(value ?? "").toUpperCase().replaceAll(" ", "_");
+
+  if (["ENTREGADO", "LISTO", "APROBADO", "ALCANZADO"].includes(status)) {
+    return "status-pill status-green";
+  }
+
+  if (
+    [
+      "EN_TRANSITO",
+      "CARGANDO",
+      "EN_ORIGEN",
+      "EN_PROGRESO",
+      "PENDIENTE",
+      "ACTIVO",
+    ].includes(status)
+  ) {
+    return "status-pill status-yellow";
+  }
+
+  if (["RECHAZADO", "CANCELADO", "RETRASADO", "BLOQUEADO"].includes(status)) {
+    return "status-pill status-red";
+  }
+
   return "status-pill status-neutral";
 }
 
-function buildDemoCheckpoints(shipment: Shipment): Checkpoint[] {
-  const dispatch =
-    parseDate(shipment.fecha_despacho_real) ??
-    parseDate(shipment.fecha_despacho_programada) ??
-    new Date();
-
-  return DEMO_CHECKPOINTS.map((point, index) => {
-    // Demonstration only: time advances by about 50 minutes per city checkpoint.
-    const occurredAt = new Date(dispatch.getTime() + index * 50 * 60 * 1000);
-    if (index === DEMO_CHECKPOINTS.length - 1) {
-      const actualDelivery = parseDate(shipment.fecha_entrega_real);
-      const estimatedDelivery = parseDate(shipment.fecha_entrega_estimada);
-      if (actualDelivery) occurredAt.setTime(actualDelivery.getTime());
-      else if (estimatedDelivery) occurredAt.setTime(estimatedDelivery.getTime());
-    }
-    return {
-      ...point,
-      occurredAt,
-      observation: index === DEMO_CHECKPOINTS.length - 1
-        ? shipment.estatus_general === "ENTREGADO"
-          ? "Entrega registrada (demo; revisar fecha real en la base)"
-          : "Último checkpoint estimado"
-        : "Checkpoint simulado por intervalo de ruta",
-      isCurrent: index === 4 && shipment.estatus_general === "EN_TRANSITO",
-    };
-  });
-}
-
-function deliveryResult(shipment: Shipment) {
+function deliveryResult(shipment: Shipment): string {
   const scheduled = parseDate(shipment.fecha_entrega_estimada);
   const actual = parseDate(shipment.fecha_entrega_real);
+
   if (shipment.estatus_general !== "ENTREGADO") {
-    if (scheduled && Date.now() > scheduled.getTime()) return "Retrasado — entrega aún no registrada";
+    if (scheduled && Date.now() > scheduled.getTime()) {
+      return "Retrasado — entrega aún no registrada";
+    }
     return "En tránsito — aún no se puede confirmar";
   }
-  if (!scheduled || !actual) return "Faltan fecha programada o fecha real";
-  return actual.getTime() <= scheduled.getTime() ? "Entregado a tiempo" : "Entregado con retraso";
+
+  if (!scheduled || !actual) {
+    return "Faltan fecha programada o fecha real";
+  }
+
+  return actual.getTime() <= scheduled.getTime()
+    ? "Entregado a tiempo"
+    : "Entregado con retraso";
+}
+
+function formatKm(value: number | string | null | undefined): string {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toFixed(1)} km` : "—";
 }
 
 export default function TrackingPage() {
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [tracking, setTracking] = useState<TrackingData | null>(null);
   const [message, setMessage] = useState("");
-  const [routeOptions, setRouteOptions] = useState<RouteOption[]>([]);
-  const [routeIndex, setRouteIndex] = useState(0);
-  const [routeLoading, setRouteLoading] = useState(false);
+  const [loadingShipments, setLoadingShipments] = useState(false);
+  const [loadingTracking, setLoadingTracking] = useState(false);
+  const [incidentLoading, setIncidentLoading] = useState(false);
 
-  async function load() {
-    const response = await fetch("/api/operaciones/envios", { cache: "no-store" });
-    if (!response.ok) throw new Error("No se pudieron cargar los envíos.");
-    const data = await response.json();
-    const filtered = (Array.isArray(data) ? data : []).filter((s: Shipment) =>
-      ["EN_TRANSITO", "ENTREGADO", "RETRASADO"].includes(String(s.estatus_general).toUpperCase())
-    );
-    setShipments(filtered);
-    if (selectedId === null && filtered.length) setSelectedId(filtered[0].id_envio);
-  }
+  const loadShipments = useCallback(async () => {
+    setLoadingShipments(true);
 
-  useEffect(() => {
-    load().catch((error) => setMessage(error.message));
-  }, []);
-
-  const selected = shipments.find((s) => s.id_envio === selectedId) ?? null;
-
-  const checkpoints = useMemo(
-    () => selected ? buildDemoCheckpoints(selected) : [],
-    [selected]
-  );
-
-  // Try the protected server API for route options. Without an API key, show demo lines.
-  // The demo coordinates must be replaced by geocoded shipment-specific coordinates.
-  useEffect(() => {
-    if (!selected) {
-      setRouteOptions([]);
-      return;
-    }
-    let cancelled = false;
-    setRouteLoading(true);
-    setRouteIndex(0);
-    fetch("/api/tracking/route", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        coordinates: [
-          [-99.516, 27.476],       // longitude, latitude: Nuevo Laredo demo origin
-          [-100.3161, 25.6866],    // longitude, latitude: Monterrey demo destination
-        ],
-      }),
-    })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Routing API no disponible.");
-        return data.routes as RouteOption[];
-      })
-      .then((routes) => {
-        if (!cancelled && routes?.length) setRouteOptions(routes);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setRouteOptions([
-            {
-              coordinates: DEMO_CHECKPOINTS.map((p) => [p.lat, p.lng]),
-              label: "Ruta base demostrativa",
-            },
-            {
-              coordinates: DEMO_ALTERNATE,
-              label: "Ruta alterna demostrativa",
-            },
-          ]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setRouteLoading(false);
+    try {
+      const response = await fetch("/api/operaciones/envios", {
+        cache: "no-store",
       });
-    return () => { cancelled = true; };
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "No se pudieron cargar los envíos.");
+      }
+
+      // El endpoint de operaciones devuelve normalmente un arreglo.
+      // También se admite { data: [...] } si tu API usa ese formato.
+      const list: Shipment[] = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+
+      const filtered = list.filter((shipment) =>
+        ["EN_TRANSITO", "ENTREGADO", "RETRASADO"].includes(
+          String(shipment.estatus_general).toUpperCase()
+        )
+      );
+
+      setShipments(filtered);
+
+      // No seleccionar el primer registro automáticamente.
+      // Si el envío seleccionado dejó de estar en la lista, limpiar su detalle.
+      if (
+        selectedId !== null &&
+        !filtered.some((shipment) => shipment.id_envio === selectedId)
+      ) {
+        setSelectedId(null);
+        setTracking(null);
+      }
+    } finally {
+      setLoadingShipments(false);
+    }
   }, [selectedId]);
 
-  const route = routeOptions[routeIndex]?.coordinates ?? DEMO_CHECKPOINTS.map((p) => [p.lat, p.lng] as [number, number]);
-  const checkpointsForMap = checkpoints;
+  const loadTracking = useCallback(async (id: number) => {
+    setLoadingTracking(true);
+
+    try {
+      const response = await fetch(`/api/tracking/${id}`, {
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            "No hay una sesión de tracking inicializada para este envío."
+        );
+      }
+
+      setTracking(data as TrackingData);
+      setMessage("");
+    } finally {
+      setLoadingTracking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadShipments().catch((error) => {
+      setMessage(
+        error instanceof Error ? error.message : "Error al cargar envíos."
+      );
+    });
+  }, [loadShipments]);
+
+  useEffect(() => {
+    if (selectedId === null) {
+      setTracking(null);
+      return;
+    }
+
+    setTracking(null);
+    loadTracking(selectedId).catch((error) => {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "No se pudo cargar el tracking."
+      );
+    });
+  }, [selectedId, loadTracking]);
+
+  const selected = useMemo(
+    () => shipments.find((shipment) => shipment.id_envio === selectedId) ?? null,
+    [shipments, selectedId]
+  );
+
+  const mapCheckpoints: MapCheckpoint[] = useMemo(() => {
+    return (tracking?.checkpoints ?? []).map((checkpoint) => ({
+      id: String(checkpoint.id_checkpoint),
+      label:
+        checkpoint.ubicacion ||
+        `Checkpoint ${checkpoint.numero_checkpoint} · ${formatKm(
+          checkpoint.distancia_acumulada_km
+        )}`,
+      lat: Number(checkpoint.latitud),
+      lng: Number(checkpoint.longitud),
+      status: checkpoint.estatus,
+    }));
+  }, [tracking?.checkpoints]);
+
+  // El servidor persiste el avance. Varias pestañas no incrementan
+  // simultáneamente porque la API controla el intervalo con una transacción.
+  useEffect(() => {
+    if (
+      selectedId === null ||
+      !tracking ||
+      tracking.session.state !== "ACTIVO" ||
+      tracking.shipment.estatus_general !== "EN_TRANSITO"
+    ) {
+      return;
+    }
+
+    const shipmentId = selectedId;
+
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/tracking/${shipmentId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "advance" }),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result?.error || "No se pudo avanzar el tracking.");
+        }
+
+        if (result?.advanced || result?.delivered || result?.finished) {
+          await loadTracking(shipmentId);
+          await loadShipments();
+        }
+      } catch (error) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Error al actualizar el tracking."
+        );
+      }
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+  }, [
+    selectedId,
+    tracking?.session.state,
+    tracking?.shipment.estatus_general,
+    loadTracking,
+    loadShipments,
+  ]);
+
+  async function simulateBlock(checkpoint: Checkpoint) {
+    if (selectedId === null) return;
+
+    const incident = window.prompt(
+      "Describe el incidente simulado:",
+      "Carretera bloqueada"
+    );
+
+    if (!incident?.trim()) return;
+
+    setIncidentLoading(true);
+    setMessage("");
+
+    try {
+      const response = await fetch(`/api/tracking/${selectedId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "block",
+          checkpointId: checkpoint.id_checkpoint,
+          incident: incident.trim(),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result?.error || "No se pudo recalcular la ruta.");
+      }
+
+      await loadTracking(selectedId);
+      setMessage("Ruta recalculada para el incidente simulado.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Error al simular el bloqueo."
+      );
+    } finally {
+      setIncidentLoading(false);
+    }
+  }
 
   return (
     <section>
       <header>
         <div>
           <h1>Tracking de envíos</h1>
-          <p className="muted">Consulta envíos en tránsito y entregados.</p>
+          <p className="muted">
+            Consulta envíos en tránsito y entregados. Selecciona un envío para
+            ver su seguimiento.
+          </p>
         </div>
-        <button type="button" className="secondary" onClick={() => load().catch(e => setMessage(e.message))}>
-          Actualizar
+
+        <button
+          type="button"
+          className="secondary"
+          disabled={loadingShipments}
+          onClick={() => {
+            setMessage("");
+            loadShipments().catch((error) =>
+              setMessage(
+                error instanceof Error
+                  ? error.message
+                  : "No se pudieron actualizar los envíos."
+              )
+            );
+
+            if (selectedId !== null) {
+              loadTracking(selectedId).catch((error) =>
+                setMessage(
+                  error instanceof Error
+                    ? error.message
+                    : "No se pudo actualizar el tracking."
+                )
+              );
+            }
+          }}
+        >
+          {loadingShipments ? "Actualizando..." : "Actualizar"}
         </button>
       </header>
 
-      {message && <p className="message error">{message}</p>}
+      {message && <p className="message">{message}</p>}
 
       <div className="panel responsive-table">
         <table>
           <thead>
             <tr>
-              <th>Código</th><th>Cliente</th><th>Trailer</th><th>Estado</th>
-              <th>Despacho programado</th><th>Entrega estimada</th>
+              <th>Código</th>
+              <th>Cliente</th>
+              <th>Trailer</th>
+              <th>Estado</th>
+              <th>Despacho programado</th>
+              <th>Entrega estimada</th>
             </tr>
           </thead>
+
           <tbody>
-            {shipments.map((s) => (
-              <tr key={s.id_envio} onClick={() => setSelectedId(s.id_envio)} style={{ cursor: "pointer" }}>
+            {shipments.map((shipment) => (
+              <tr
+                key={shipment.id_envio}
+                onClick={() => setSelectedId(shipment.id_envio)}
+                style={{
+                  cursor: "pointer",
+                  background:
+                    selectedId === shipment.id_envio
+                      ? "var(--selected-row, rgba(37, 99, 235, 0.08))"
+                      : undefined,
+                }}
+                aria-selected={selectedId === shipment.id_envio}
+              >
                 <td>
-                  <button type="button" className="table-link" onClick={(e) => { e.stopPropagation(); setSelectedId(s.id_envio); }}>
-                    {s.codigo_envio}
+                  <button
+                    type="button"
+                    className="table-link"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedId(shipment.id_envio);
+                    }}
+                  >
+                    {shipment.codigo_envio}
                   </button>
                 </td>
-                <td>{s.nombre_cliente}</td>
-                <td>{s.codigo_trailer || "Sin asignar"}</td>
-                <td><span className={statusClass(s.estatus_general)}>{String(s.estatus_general).replaceAll("_", " ")}</span></td>
-                <td>{fmt(s.fecha_despacho_programada)}</td>
-                <td>{fmt(s.fecha_entrega_estimada)}</td>
+                <td>{shipment.nombre_cliente}</td>
+                <td>{shipment.codigo_trailer || "Sin asignar"}</td>
+                <td>
+                  <span className={statusClass(shipment.estatus_general)}>
+                    {String(shipment.estatus_general).replaceAll("_", " ")}
+                  </span>
+                </td>
+                <td>{fmt(shipment.fecha_despacho_programada)}</td>
+                <td>{fmt(shipment.fecha_entrega_estimada)}</td>
               </tr>
             ))}
-            {!shipments.length && <tr><td colSpan={6}>No hay envíos en tránsito o entregados.</td></tr>}
+
+            {!loadingShipments && shipments.length === 0 && (
+              <tr>
+                <td colSpan={6}>No hay envíos en tránsito o entregados.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
 
-      {selected && (
+      {!selectedId && (
+        <p className="muted">
+          Selecciona un envío de la tabla para abrir su timeline y mapa.
+        </p>
+      )}
+
+      {selectedId !== null && loadingTracking && (
+        <p className="muted">Cargando información del envío...</p>
+      )}
+
+      {selected && tracking && (
         <div className="tracking-layout">
           <aside className="panel tracking-timeline">
             <div className="detail-heading">
               <div>
                 <h2>{selected.codigo_envio}</h2>
-                <p className="muted">{selected.nombre_cliente} · {selected.codigo_trailer || "Sin trailer"}</p>
+                <p className="muted">
+                  {selected.nombre_cliente} ·{" "}
+                  {selected.codigo_trailer || "Sin trailer"}
+                </p>
               </div>
-              <span className={statusClass(selected.estatus_general)}>{selected.estatus_general.replaceAll("_", " ")}</span>
+
+              <span className={statusClass(selected.estatus_general)}>
+                {selected.estatus_general.replaceAll("_", " ")}
+              </span>
             </div>
 
             <div className="tracking-times">
-              <p><strong>Despacho programado:</strong><br />{fmt(selected.fecha_despacho_programada)}</p>
-              <p><strong>Despacho real:</strong><br />{fmt(selected.fecha_despacho_real)}</p>
-              <p><strong>Entrega programada:</strong><br />{fmt(selected.fecha_entrega_estimada)}</p>
-              <p><strong>Entrega real:</strong><br />{fmt(selected.fecha_entrega_real)}</p>
+              <p>
+                <strong>Despacho programado:</strong>
+                <br />
+                {fmt(selected.fecha_despacho_programada)}
+              </p>
+              <p>
+                <strong>Despacho real:</strong>
+                <br />
+                {fmt(selected.fecha_despacho_real)}
+              </p>
+              <p>
+                <strong>Entrega programada:</strong>
+                <br />
+                {fmt(selected.fecha_entrega_estimada)}
+              </p>
+              <p>
+                <strong>Entrega real:</strong>
+                <br />
+                {fmt(selected.fecha_entrega_real)}
+              </p>
             </div>
 
-            <p><strong>Resultado de entrega:</strong> {deliveryResult(selected)}</p>
-            <p className="muted">
-              Los checkpoints siguientes son simulados para demostración. No son lecturas GPS.
-              La ruta de ejemplo es Nuevo Laredo → Monterrey y no sustituye el destino guardado en el envío.
+            <p>
+              <strong>Resultado de entrega:</strong>{" "}
+              {deliveryResult(tracking.shipment)}
             </p>
 
-            <h3>10 checkpoints simulados (intervalo ilustrativo)</h3>
-            <ol className="checkpoint-list">
-              {checkpoints.map((point, index) => (
-                <li key={point.id} className={point.isCurrent ? "checkpoint-current" : ""}>
-                  <div className="checkpoint-dot" />
-                  <div>
-                    <strong>{index + 1}. {point.label}</strong>
-                    <div className="muted">{fmt(point.occurredAt)}</div>
-                    <div className="muted">{point.observation}</div>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            <div className="tracking-progress">
+              <p>
+                <strong>Progreso simulado:</strong>{" "}
+                {formatKm(tracking.session.progressKm)} /{" "}
+                {formatKm(tracking.session.distanceKm)}
+              </p>
+              <p>
+                <strong>Duración estimada del tramo:</strong>{" "}
+                {Math.round(tracking.session.durationMinutes)} min
+              </p>
+              {tracking.session.incident && (
+                <p>
+                  <strong>Incidente actual:</strong>{" "}
+                  {tracking.session.incident}
+                </p>
+              )}
+              <p className="muted">
+                La posición es una simulación persistida, no una lectura GPS del
+                vehículo.
+              </p>
+            </div>
+
+            <h3>Checkpoint de ruta</h3>
+
+            {tracking.checkpoints.length === 0 ? (
+              <p className="muted">
+                No hay checkpoints pendientes o registrados para este envío.
+              </p>
+            ) : (
+              <ol className="checkpoint-list">
+                {tracking.checkpoints.map((checkpoint) => (
+                  <li
+                    key={checkpoint.id_checkpoint}
+                    className={
+                      checkpoint.estatus === "ALCANZADO"
+                        ? "checkpoint-current"
+                        : ""
+                    }
+                  >
+                    <div className="checkpoint-dot" />
+                    <div>
+                      <strong>
+                        {checkpoint.numero_checkpoint}.{" "}
+                        {checkpoint.ubicacion ||
+                          `Checkpoint ${checkpoint.numero_checkpoint}`}
+                      </strong>
+                      <div className="muted">
+                        {formatKm(checkpoint.distancia_acumulada_km)} ·{" "}
+                        {checkpoint.estatus}
+                      </div>
+                      {checkpoint.fecha_registro && (
+                        <div className="muted">
+                          {fmt(checkpoint.fecha_registro)}
+                        </div>
+                      )}
+                      {checkpoint.observaciones && (
+                        <div className="muted">{checkpoint.observaciones}</div>
+                      )}
+
+                      {checkpoint.estatus === "PENDIENTE" &&
+                        tracking.shipment.estatus_general === "EN_TRANSITO" && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={incidentLoading}
+                            onClick={() => simulateBlock(checkpoint)}
+                          >
+                            {incidentLoading
+                              ? "Recalculando..."
+                              : "Simular incidente aquí"}
+                          </button>
+                        )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
           </aside>
 
           <div className="panel tracking-map-panel">
             <div className="detail-heading">
               <div>
                 <h2>Mapa de ruta</h2>
-                <p className="muted">Vista demostrativa con ciudades y coordenadas aproximadas.</p>
+                <p className="muted">
+                  Ruta vial calculada y posición simulada del camión.
+                </p>
               </div>
-              <button
-                type="button"
-                className="secondary"
-                disabled={routeLoading || routeOptions.length < 2}
-                onClick={() => setRouteIndex((i) => (i + 1) % routeOptions.length)}
-              >
-                {routeLoading ? "Calculando..." : "Simular ruta alterna"}
-              </button>
             </div>
-            {routeOptions[routeIndex] && (
+
+            {tracking.session.route.length > 1 ? (
+              <TrackingMap
+                route={tracking.session.route}
+                originalRoute={tracking.session.originalRoute}
+                currentPosition={tracking.session.currentPosition}
+                checkpoints={mapCheckpoints}
+              />
+            ) : (
               <p className="muted">
-                {routeOptions[routeIndex].label}
-                {routeOptions[routeIndex].distanceKm ? ` · ${routeOptions[routeIndex].distanceKm!.toFixed(1)} km` : ""}
-                {routeOptions[routeIndex].durationMinutes ? ` · ${Math.round(routeOptions[routeIndex].durationMinutes!)} min` : ""}
+                La sesión no contiene una geometría de ruta válida.
               </p>
             )}
-            <TrackingMap route={route} checkpoints={checkpointsForMap} />
-            <p className="muted">© OpenStreetMap contributors. La alternativa se obtiene del API si se configura; de lo contrario es una línea de demo.</p>
+
+            <p className="muted">
+              © OpenStreetMap contributors. Los incidentes son simulados; no se
+              consultan cierres ni tráfico en vivo.
+            </p>
           </div>
         </div>
       )}
     </section>
   );
 }
+

@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-
+import { initializeTracking } from "@/app/lib/tracking";
 import pool from "@/app/lib/db";
-
 import bcrypt from "bcryptjs";
-
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
 type RequestBody = Record<string, unknown>;
@@ -624,6 +622,14 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         "UPDATE envios SET estatus_general = ? WHERE id_envio = ?",
         [nextStatus, Number(data.id_envio)]
       );
+      if (nextStatus === "EN_TRANSITO") {
+        try {
+          await initializeTracking(Number(data.id_envio));
+        } catch (trackingError) {
+          // La aprobación ya se guardó. Un error de rutas no debe revertirla.
+          console.error("No se pudo inicializar tracking:", trackingError);
+        }
+  }
     }
 
     return NextResponse.json({ id: result.insertId }, { status: 201 });

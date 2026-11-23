@@ -9,27 +9,34 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
-export type MapPoint = {
+type MapPoint = {
   id: string;
   label: string;
   lat: number;
   lng: number;
+  status: string;
 };
 
 type Props = {
   route: [number, number][];
+  originalRoute: [number, number][];
+  currentPosition: [number, number];
   checkpoints: MapPoint[];
 };
 
-export default function TrackingMap({ route, checkpoints }: Props) {
-  const origin: [number, number] = route[0] ?? [27.476, -99.516];
-  const destination: [number, number] = route[route.length - 1] ?? [25.6866, -100.3161];
-  const bounds = route.length ? route : [origin, destination];
+export default function TrackingMap({
+  route,
+  originalRoute,
+  currentPosition,
+  checkpoints,
+}: Props) {
+  if (!route.length) return <p>No hay geometría de ruta para mostrar.</p>;
 
   return (
-    <div className="tracking-map">
+    <div style={{ width: "100%", height: "100%", minHeight: 420 }}>
       <MapContainer
-        bounds={bounds as [number, number][]}
+        key={`${route[0][0]}-${route[0][1]}-${route.length}`}
+        bounds={route}
         boundsOptions={{ padding: [28, 28] }}
         scrollWheelZoom
         style={{ width: "100%", height: "100%", minHeight: 420 }}
@@ -40,27 +47,75 @@ export default function TrackingMap({ route, checkpoints }: Props) {
           maxZoom={19}
         />
 
-        <Polyline positions={route} pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.85 }} />
+        {originalRoute.length > 1 && (
+          <Polyline
+            positions={originalRoute}
+            pathOptions={{
+              color: "#94a3b8",
+              weight: 4,
+              opacity: 0.55,
+              dashArray: "8 8",
+            }}
+          />
+        )}
 
-        <CircleMarker center={origin} radius={9} pathOptions={{ color: "#15803d", fillColor: "#22c55e", fillOpacity: 1 }}>
-          <Popup>Origen de demostración</Popup>
+        <Polyline
+          positions={route}
+          pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.9 }}
+        />
+
+        <CircleMarker
+          center={route[0]}
+          radius={8}
+          pathOptions={{
+            color: "#15803d",
+            fillColor: "#22c55e",
+            fillOpacity: 1,
+          }}
+        >
+          <Popup>Inicio del tramo activo</Popup>
         </CircleMarker>
 
-        <CircleMarker center={destination} radius={9} pathOptions={{ color: "#b91c1c", fillColor: "#ef4444", fillOpacity: 1 }}>
-          <Popup>Destino de demostración</Popup>
+        <CircleMarker
+          center={route[route.length - 1]}
+          radius={8}
+          pathOptions={{
+            color: "#b91c1c",
+            fillColor: "#ef4444",
+            fillOpacity: 1,
+          }}
+        >
+          <Popup>Destino</Popup>
         </CircleMarker>
 
-        {checkpoints.map((point, index) => (
+        <CircleMarker
+          center={currentPosition}
+          radius={10}
+          pathOptions={{
+            color: "#1d4ed8",
+            fillColor: "#facc15",
+            fillOpacity: 1,
+            weight: 3,
+          }}
+        >
+          <Popup>Posición simulada del camión</Popup>
+        </CircleMarker>
+
+        {checkpoints.map((point) => (
           <CircleMarker
             key={point.id}
             center={[point.lat, point.lng]}
             radius={5}
-            pathOptions={{ color: "#1d4ed8", fillColor: "#93c5fd", fillOpacity: 1 }}
+            pathOptions={{
+              color: point.status === "ALCANZADO" ? "#15803d" : "#64748b",
+              fillColor: point.status === "ALCANZADO" ? "#22c55e" : "#cbd5e1",
+              fillOpacity: 1,
+            }}
           >
             <Popup>
-              <strong>Checkpoint {index + 1}</strong>
+              <strong>{point.label}</strong>
               <br />
-              {point.label}
+              {point.status}
             </Popup>
           </CircleMarker>
         ))}

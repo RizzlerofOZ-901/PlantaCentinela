@@ -6,7 +6,7 @@ export type LatLng = [number, number];
 const ORIGIN: LatLng = [27.4783865, -99.5075197];
 
 const DESTINATIONS: Record<string, LatLng> = {
-  "JOHNSON CONTROLS": [25.772584, -100.191632],
+  JOHNSON_CONTROLS: [25.772584, -100.191632],
   NIDEC: [25.778848, -100.198305],
   NEMAK: [25.7331043, -100.5371376],
   METALSA: [25.7674251, -100.1911475],

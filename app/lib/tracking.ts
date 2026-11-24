@@ -10,6 +10,7 @@ const DESTINATIONS: Record<string, LatLng> = {
   NIDEC: [25.778848, -100.198305],
   NEMAK: [25.7331043, -100.5371376],
   METALSA: [25.7674251, -100.1911475],
+  LENOVO: [25.7766, -100.1706]
 };
 
 type RouteResult = {

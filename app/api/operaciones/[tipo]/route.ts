@@ -250,6 +250,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       const departments = [
         "ALMACEN",
         "TRAFICO",
+        "TRACKING",
         "EMBARQUES",
         "INSPECCION",
         "ADMINISTRACION",
@@ -576,10 +577,20 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       const nextStatus =
         data.decision === "APROBADO" ? "EN_TRANSITO" : "RECHAZADO";
 
-      await pool.execute(
-        "UPDATE envios SET estatus_general = ? WHERE id_envio = ?",
-        [nextStatus, shipmentId]
-      );
+      if (nextStatus === "EN_TRANSITO") {
+        await pool.execute(
+          `UPDATE envios
+           SET estatus_general = 'EN_TRANSITO',
+               fecha_despacho_real = COALESCE(fecha_despacho_real, NOW())
+           WHERE id_envio = ?`,
+          [shipmentId]
+        );
+      } else {
+        await pool.execute(
+          "UPDATE envios SET estatus_general = ? WHERE id_envio = ?",
+          [nextStatus, shipmentId]
+        );
+      }
 
       if (nextStatus === "EN_TRANSITO") {
         try {

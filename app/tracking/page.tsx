@@ -476,6 +476,7 @@ export default function TrackingPage() {
             className="centinela-card detail-panel modal-dialog modal-dialog-wide"
             onClick={(e) => e.stopPropagation()}
           >
+            {/* Header */}
             <div className="detail-heading" style={{ marginBottom: "14px" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <h2 style={{ margin: 0 }}>Seguimiento</h2>
@@ -537,50 +538,29 @@ export default function TrackingPage() {
                 </p>
               </div>
             ) : tracking ? (
-              <div className="tracking-layout">
-                <aside
-                  className="panel tracking-timeline"
-                  style={{ marginBottom: 0 }}
-                >
-                  <div className="tracking-times">
-                    <div className="tracking-time-item">
-                      <span className="tracking-time-label">
-                        Despacho programado:
-                      </span>
-                      <span className="tracking-time-value">
-                        {fmtDateTime(tracking.shipment.fecha_despacho_programada)}
-                      </span>
-                    </div>
-
-                    <div className="tracking-time-item">
-                      <span className="tracking-time-label">
-                        Despacho efectivo:
-                      </span>
-                      <span className="tracking-time-value">
-                        {fmtDateTime(tracking.shipment.fecha_despacho_real)}
-                      </span>
-                    </div>
-
-                    <div className="tracking-time-item">
-                      <span className="tracking-time-label">
-                        Entrega programada:
-                      </span>
-                      <span className="tracking-time-value">
-                        {fmtDateTime(tracking.shipment.fecha_entrega_estimada)}
-                      </span>
-                    </div>
-
-                    <div className="tracking-time-item">
-                      <span className="tracking-time-label">
-                        Entrega efectiva:
-                      </span>
-                      <span className="tracking-time-value">
-                        {fmtDateTime(tracking.shipment.fecha_entrega_real)}
-                      </span>
-                    </div>
+              <>
+                {/* 1. WIDE TOP CONTAINER: Shipment Status & Timestamps */}
+                <div className="panel tracking-status-banner">
+                  <div className="tracking-status-col">
+                    <p>
+                      <strong>Despacho programado:</strong>{" "}
+                      {fmtDateTime(tracking.shipment.fecha_despacho_programada)}
+                    </p>
+                    <p>
+                      <strong>Despacho efectivo:</strong>{" "}
+                      {fmtDateTime(tracking.shipment.fecha_despacho_real)}
+                    </p>
+                    <p>
+                      <strong>Entrega programada:</strong>{" "}
+                      {fmtDateTime(tracking.shipment.fecha_entrega_estimada)}
+                    </p>
+                    <p>
+                      <strong>Entrega efectiva:</strong>{" "}
+                      {fmtDateTime(tracking.shipment.fecha_entrega_real)}
+                    </p>
                   </div>
 
-                  <div className="tracking-summary">
+                  <div className="tracking-status-col">
                     <p>
                       <strong>Estatus de entrega:</strong>{" "}
                       {deliveryResult(tracking.shipment)}
@@ -594,135 +574,144 @@ export default function TrackingPage() {
                       <strong>Duración de la ruta:</strong>{" "}
                       {Math.round(tracking.session.durationMinutes)} min
                     </p>
-                    {tracking.session.incident && (
-                      <p>
-                        <strong>Incidente actual:</strong>{" "}
-                        {tracking.session.incident}
-                      </p>
-                    )}
-                  </div>
-
-                  <h3 className="tracking-checkpoints-title">
-                    Recorrido por ciudad (cada 30 km)
-                  </h3>
-
-                  {visibleCheckpoints.length === 0 ? (
-                    <p className="muted" style={{ margin: 0 }}>
-                      Sin puntos de recorrido registrados.
+                    <p>
+                      <strong>Incidente actual:</strong>{" "}
+                      {tracking.session.incident || "Sin incidentes"}
                     </p>
-                  ) : (
-                    <ol className="checkpoint-list">
-                      {visibleCheckpoints.map((checkpoint, idx) => {
-                        const isDestination =
-                          idx === visibleCheckpoints.length - 1 &&
-                          visibleCheckpoints.length > 1;
-                        return (
-                          <li
-                            key={checkpoint.id_checkpoint}
-                            className={
-                              checkpoint.estatus === "ALCANZADO"
-                                ? "checkpoint-current"
-                                : ""
-                            }
-                            style={
-                              checkpoint.estatus === "BLOQUEADO"
-                                ? {
-                                    borderColor: "#e7a4a1",
-                                    background: "#fde8e7",
-                                  }
-                                : undefined
-                            }
-                          >
-                            <div
-                              className="checkpoint-dot"
+                  </div>
+                </div>
+
+                {/* 2. BOTTOM 2-COLUMN CONTAINERS: Equal Height Scrollable Checkpoints + Map */}
+                <div className="tracking-layout">
+                  <aside className="panel tracking-checkpoints-panel">
+                    <h3 className="tracking-checkpoints-title">
+                      Recorrido por ciudad (cada 30 km)
+                    </h3>
+
+                    {visibleCheckpoints.length === 0 ? (
+                      <p className="muted" style={{ margin: 0 }}>
+                        Sin puntos de recorrido registrados.
+                      </p>
+                    ) : (
+                      <ol className="checkpoint-list tracking-checkpoints-scroll">
+                        {visibleCheckpoints.map((checkpoint, idx) => {
+                          const isDestination =
+                            idx === visibleCheckpoints.length - 1 &&
+                            visibleCheckpoints.length > 1;
+                          return (
+                            <li
+                              key={checkpoint.id_checkpoint}
+                              className={
+                                checkpoint.estatus === "ALCANZADO"
+                                  ? "checkpoint-current"
+                                  : ""
+                              }
                               style={
                                 checkpoint.estatus === "BLOQUEADO"
-                                  ? { background: "#b91c1c" }
+                                  ? {
+                                      borderColor: "#e7a4a1",
+                                      background: "#fde8e7",
+                                    }
                                   : undefined
                               }
-                            />
-                            <div>
-                              <strong>
-                                {checkpoint.ubicacion ||
-                                  `Punto ${checkpoint.numero_checkpoint}`}
-                              </strong>
-                              <div className="muted">
-                                {formatKm(checkpoint.distancia_acumulada_km)}
-                                {checkpoint.fecha_registro
-                                  ? ` · ${fmtDateTime(checkpoint.fecha_registro)}`
-                                  : isDestination
-                                    ? " · Destino final"
-                                    : ""}
-                              </div>
-                              {checkpoint.observaciones && (
+                            >
+                              <div
+                                className="checkpoint-dot"
+                                style={
+                                  checkpoint.estatus === "BLOQUEADO"
+                                    ? { background: "#b91c1c" }
+                                    : undefined
+                                }
+                              />
+                              <div>
+                                <strong>
+                                  {checkpoint.ubicacion ||
+                                    `Punto ${checkpoint.numero_checkpoint}`}
+                                </strong>
                                 <div className="muted">
-                                  {checkpoint.observaciones}
+                                  {formatKm(checkpoint.distancia_acumulada_km)}
+                                  {checkpoint.fecha_registro
+                                    ? ` · ${fmtDateTime(checkpoint.fecha_registro)}`
+                                    : isDestination
+                                      ? " · Destino final"
+                                      : ""}
                                 </div>
-                              )}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ol>
-                  )}
-                </aside>
-
-                <div
-                  className="panel tracking-map-panel"
-                  style={{ marginBottom: 0 }}
-                >
-                  <div className="detail-heading" style={{ marginBottom: "10px" }}>
-                    <div>
-                      <h2 style={{ margin: "0 0 2px" }}>Mapa de ruta</h2>
-                      <p className="muted" style={{ margin: 0 }}>
-                        {isInTransit && blockMode
-                          ? "Haz clic en cualquier punto de la ruta para simular un bloqueo vial y calcular una ruta alterna."
-                          : "Ruta vial calculada y posición simulada del camión."}
-                      </p>
-                    </div>
-                    {isInTransit && (
-                      <button
-                        type="button"
-                        className={blockMode ? "button-reject" : "secondary"}
-                        style={{ padding: "7px 14px", fontSize: "12.5px" }}
-                        disabled={incidentLoading}
-                        onClick={() => setBlockMode((v) => !v)}
-                      >
-                        {incidentLoading
-                          ? "Recalculando..."
-                          : blockMode
-                            ? "Modo bloqueo: ACTIVO"
-                            : "Activar bloqueo en mapa"}
-                      </button>
+                                {checkpoint.observaciones && (
+                                  <div className="muted">
+                                    {checkpoint.observaciones}
+                                  </div>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
                     )}
-                  </div>
+                  </aside>
 
-                  {tracking.session.route.length > 1 ? (
-                    <TrackingMap
-                      route={tracking.session.route}
-                      originalRoute={tracking.session.originalRoute}
-                      currentPosition={tracking.session.currentPosition}
-                      checkpoints={mapCheckpoints}
-                      blockedCenter={tracking.session.blockedCenter}
-                      canBlock={isInTransit && blockMode && !incidentLoading}
-                      onMapClickBlock={handleBlockOnMap}
-                    />
-                  ) : (
-                    <p className="muted">
-                      La sesión no contiene una geometría de ruta válida.
+                  <div className="panel tracking-map-panel">
+                    <div
+                      className="detail-heading"
+                      style={{ marginBottom: "10px", flexShrink: 0 }}
+                    >
+                      <div>
+                        <h2 style={{ margin: "0 0 2px" }}>Mapa de ruta</h2>
+                        <p className="muted" style={{ margin: 0 }}>
+                          {isInTransit && blockMode
+                            ? "Haz clic en cualquier punto de la ruta para simular un bloqueo vial y calcular una ruta alterna."
+                            : "Ruta vial calculada y posición simulada del camión."}
+                        </p>
+                      </div>
+                      {isInTransit && (
+                        <button
+                          type="button"
+                          className={blockMode ? "button-reject" : "secondary"}
+                          style={{ padding: "7px 14px", fontSize: "12.5px" }}
+                          disabled={incidentLoading}
+                          onClick={() => setBlockMode((v) => !v)}
+                        >
+                          {incidentLoading
+                            ? "Recalculando..."
+                            : blockMode
+                              ? "Modo bloqueo: ACTIVO"
+                              : "Activar bloqueo en mapa"}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="tracking-map-wrap">
+                      {tracking.session.route.length > 1 ? (
+                        <TrackingMap
+                          route={tracking.session.route}
+                          originalRoute={tracking.session.originalRoute}
+                          currentPosition={tracking.session.currentPosition}
+                          checkpoints={mapCheckpoints}
+                          blockedCenter={tracking.session.blockedCenter}
+                          canBlock={isInTransit && blockMode && !incidentLoading}
+                          onMapClickBlock={handleBlockOnMap}
+                        />
+                      ) : (
+                        <p className="muted">
+                          La sesión no contiene una geometría de ruta válida.
+                        </p>
+                      )}
+                    </div>
+
+                    <p
+                      className="muted"
+                      style={{
+                        marginBottom: 0,
+                        marginTop: "10px",
+                        flexShrink: 0,
+                      }}
+                    >
+                      © OpenStreetMap contributors. Si no existe vía alterna
+                      disponible, la unidad se detiene 10 segundos simulando
+                      tráfico intenso.
                     </p>
-                  )}
-
-                  <p
-                    className="muted"
-                    style={{ marginBottom: 0, marginTop: "10px" }}
-                  >
-                    © OpenStreetMap contributors. Si no existe vía alterna
-                    disponible, la unidad se detiene 10 segundos simulando
-                    tráfico intenso.
-                  </p>
+                  </div>
                 </div>
-              </div>
+              </>
             ) : (
               <div className="panel" style={{ marginBottom: 0 }}>
                 <p className="muted" style={{ margin: 0 }}>

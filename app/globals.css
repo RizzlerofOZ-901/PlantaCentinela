@@ -781,72 +781,52 @@ tbody tr.selected-row {
 /* =========================================================
    TRACKING / SEGUIMIENTO RESPONSIVE LAYOUT
    ========================================================= */
-.tracking-layout {
-  display: grid;
-  grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
+.modal-dialog-wide {
+  max-width: 1180px;
 }
 
-.tracking-timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.tracking-times {
+.tracking-status-banner {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 14px;
-  padding: 12px 14px;
-  background: var(--content-bg, #eef4fb);
-  border: 1px solid #cbd9ea;
-  border-radius: 12px;
+  gap: 10px 24px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  background: #ffffff;
 }
 
-.tracking-time-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.tracking-time-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--navy-dark, #052c56);
-}
-
-.tracking-time-value {
-  font-size: 13.5px;
-  color: var(--text-main, #10243e);
-  line-height: 1.3;
-}
-
-.tracking-summary {
+.tracking-status-col {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #cbd9ea;
-  border-radius: 12px;
   font-size: 14px;
+  min-width: 0;
 }
 
-.tracking-summary p {
+.tracking-status-col p {
   margin: 0;
   line-height: 1.4;
 }
 
-.tracking-summary-note {
-  margin-top: 4px !important;
-  font-size: 12px;
+.tracking-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 410px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.tracking-checkpoints-panel,
+.tracking-map-panel {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  height: 560px;
+  min-height: 0;
 }
 
 .tracking-checkpoints-title {
-  margin: 4px 0 0;
+  margin: 0 0 12px;
   font-size: 16px;
+  flex-shrink: 0;
 }
 
 .checkpoint-list {
@@ -856,6 +836,21 @@ tbody tr.selected-row {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.tracking-checkpoints-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.tracking-map-wrap {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
 }
 
 .checkpoint-list li {
@@ -886,18 +881,30 @@ tbody tr.selected-row {
   background: #176534;
 }
 
-/* Tablet & Mobile breakpoints */
+/* Tablet & Smartphone breakpoints */
 @media (max-width: 960px) {
   .tracking-layout {
     grid-template-columns: 1fr;
   }
+
+  .tracking-checkpoints-panel {
+    height: auto;
+    max-height: 360px;
+  }
+
+  .tracking-map-panel {
+    height: auto;
+    min-height: 480px;
+  }
 }
 
-@media (max-width: 480px) {
-  .tracking-times {
+@media (max-width: 720px) {
+  .tracking-status-banner {
     grid-template-columns: 1fr;
     gap: 8px;
+    padding: 12px 14px;
   }
+
   .modal-dialog {
     padding: 14px;
     max-height: 92vh;

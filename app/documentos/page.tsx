@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { statusClass } from "@/app/lib/session";
 
 type Shipment = {
   id_envio: number;
@@ -19,58 +20,52 @@ type Doc = {
   estatus_documento: string;
 };
 
+type User = {
+  id_usuario: number;
+  nombre_completo: string;
+  rol: string;
+  departamento: string;
+  activo: number | boolean;
+};
+
 const order = ["BOL", "FACTURA", "CARTA_PORTE", "LISTA_EMPAQUE"];
 
 function label(v: string) {
   return v.replaceAll("_", " ");
 }
 
-function statusClass(value: unknown) {
-  const s = String(value ?? "").toUpperCase();
-  if (
-    [
-      "LISTO",
-      "APROBADO",
-      "BUENO",
-      "EXCELENTE",
-      "ENTREGADO",
-      "EN_TRANSITO",
-    ].includes(s)
-  )
-    return "status-pill status-green";
-  if (
-    ["EN PROGRESO", "EN_PROCESO", "CARGANDO", "PENDIENTE", "EN_ORIGEN"].includes(
-      s
-    )
-  )
-    return "status-pill status-yellow";
-  if (
-    ["RECHAZADO", "CANCELADO", "NO_ENTREGADO", "MALO", "DEFICIENTE"].includes(s)
-  )
-    return "status-pill status-red";
-  if (["REGULAR", "OBSERVACIONES"].includes(s))
-    return "status-pill status-orange";
-  return "status-pill status-neutral";
-}
-
 export default function Page() {
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [operators, setOperators] = useState<User[]>([]);
+  const [uid, setUid] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<number, string>>({});
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+
   async function load() {
-    const [a, b] = await Promise.all([
+    const [a, b, c] = await Promise.all([
       fetch("/api/operaciones/envios", { cache: "no-store" }),
       fetch("/api/operaciones/documentos", { cache: "no-store" }),
+      fetch("/api/operaciones/usuarios", { cache: "no-store" }),
     ]);
-    if (!a.ok || !b.ok)
-      throw new Error("No se pudieron cargar envíos o documentos.");
-    const [s, d] = await Promise.all([a.json(), b.json()]);
+    if (!a.ok || !b.ok || !c.ok)
+      throw new Error("No se pudieron cargar envíos, documentos o usuarios.");
+    const [s, d, u] = await Promise.all([a.json(), b.json(), c.json()]);
     setShipments(Array.isArray(s) ? s : []);
     setDocs(Array.isArray(d) ? d : []);
+    setOperators(
+      (Array.isArray(u) ? (u as User[]) : []).filter(
+        (x) =>
+          (x.activo === true || Number(x.activo) === 1) &&
+          String(x.rol).toUpperCase() === "OPERADOR" &&
+          String(x.departamento).toUpperCase() === "TRAFICO"
+      )
+    );
     setDraft({});
   }
 
@@ -78,7 +73,6 @@ export default function Page() {
     load().catch((e) => setMsg(e.message));
   }, []);
 
-  // Close modal with Escape key
   useEffect(() => {
     if (expanded === null) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -110,6 +104,19 @@ export default function Page() {
     return "EN PROGRESO";
   }
 
+  const filteredShipments = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return shipments.filter((s) => {
+      const st = status(s.id_envio);
+      if (statusFilter !== "ALL" && st !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        s.codigo_envio.toLowerCase().includes(q) ||
+        s.nombre_cliente.toLowerCase().includes(q)
+      );
+    });
+  }, [shipments, grouped, draft, search, statusFilter]);
+
   function changedForShipment(id: number) {
     return (grouped.get(id) || []).some(
       (d) =>
@@ -127,6 +134,10 @@ export default function Page() {
   }
 
   async function save() {
+    if (!uid) {
+      setMsg("Selecciona un operador de Tráfico activo.");
+      return;
+    }
     const changes = docs.filter(
       (d) =>
         draft[d.id_documento] !== undefined &&
@@ -146,6 +157,7 @@ export default function Page() {
           body: JSON.stringify({
             id_documento: d.id_documento,
             estatus_documento: draft[d.id_documento],
+            actualizado_por: Number(uid),
           }),
         });
         const result = await response.json();
@@ -156,6 +168,7 @@ export default function Page() {
       }
       await load();
       setExpanded(null);
+      setUid("");
       setMsg("Cambios guardados.");
     } catch (e) {
       setMsg(
@@ -186,7 +199,8 @@ export default function Page() {
         <p
           className={`message ${
             msg.toLowerCase().includes("error") ||
-            msg.toLowerCase().includes("no se pudo")
+            msg.toLowerCase().includes("no se pudo") ||
+            msg.toLowerCase().includes("selecciona")
               ? "error"
               : ""
           }`}
@@ -195,7 +209,23 @@ export default function Page() {
         </p>
       )}
 
-      {/* SHIPMENTS TABLE */}
+      <div className="filter-bar">
+        <input
+          type="text"
+          placeholder="Buscar por envío o cliente..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+        >
+          <option value="ALL">Todos los estatus</option>
+          <option value="EN PROGRESO">EN PROGRESO</option>
+          <option value="LISTO">LISTO</option>
+        </select>
+      </div>
+
       <div className="panel responsive-table">
         <table>
           <thead>
@@ -207,10 +237,13 @@ export default function Page() {
             </tr>
           </thead>
           <tbody>
-            {shipments.map((s) => (
+            {filteredShipments.map((s) => (
               <tr
                 key={s.id_envio}
-                onClick={() => setExpanded(s.id_envio)}
+                onClick={() => {
+                  setExpanded(s.id_envio);
+                  setUid("");
+                }}
                 className={expanded === s.id_envio ? "selected-row" : ""}
                 style={{ cursor: "pointer" }}
               >
@@ -221,6 +254,7 @@ export default function Page() {
                     onClick={(e) => {
                       e.stopPropagation();
                       setExpanded(s.id_envio);
+                      setUid("");
                     }}
                   >
                     {s.codigo_envio}
@@ -235,16 +269,17 @@ export default function Page() {
                 </td>
               </tr>
             ))}
-            {!shipments.length && (
+            {!filteredShipments.length && (
               <tr>
-                <td colSpan={4}>Todavía no hay envíos.</td>
+                <td colSpan={4} className="muted">
+                  No se encontraron envíos con esos filtros.
+                </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {/* MODAL OVERLAY IN FRONT OF THE TABLE */}
       {expanded !== null && activeShipment && (
         <div
           className="modal-backdrop"
@@ -271,6 +306,28 @@ export default function Page() {
                 Cerrar
               </button>
             </div>
+
+            <label className="field">
+              Operador de Tráfico
+              <select
+                value={uid}
+                onChange={(e) => setUid(e.target.value)}
+                required
+              >
+                <option value="">Seleccionar operador de Tráfico activo</option>
+                {operators.map((u) => (
+                  <option key={u.id_usuario} value={u.id_usuario}>
+                    {u.nombre_completo}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {!operators.length && (
+              <p className="muted">
+                No hay operadores activos en el departamento TRAFICO.
+              </p>
+            )}
 
             <p className="muted">
               Los cambios permanecen pendientes hasta presionar Guardar. El
@@ -312,7 +369,12 @@ export default function Page() {
               <button
                 type="button"
                 onClick={save}
-                disabled={loading || !changedForShipment(expanded)}
+                disabled={
+                  loading ||
+                  !uid ||
+                  !operators.length ||
+                  !changedForShipment(expanded)
+                }
               >
                 {loading ? "Guardando..." : "Guardar"}
               </button>
@@ -331,3 +393,4 @@ export default function Page() {
     </section>
   );
 }
+

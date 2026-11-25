@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { statusClass } from "@/app/lib/session";
+import { getSessionUser, statusClass, type SessionUser } from "@/app/lib/session";
 
 type Shipment = {
   id_envio: number;
@@ -20,14 +20,6 @@ type Doc = {
   estatus_documento: string;
 };
 
-type User = {
-  id_usuario: number;
-  nombre_completo: string;
-  rol: string;
-  departamento: string;
-  activo: number | boolean;
-};
-
 const order = ["BOL", "FACTURA", "CARTA_PORTE", "LISTA_EMPAQUE"];
 
 function label(v: string) {
@@ -35,10 +27,9 @@ function label(v: string) {
 }
 
 export default function Page() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [docs, setDocs] = useState<Doc[]>([]);
-  const [operators, setOperators] = useState<User[]>([]);
-  const [uid, setUid] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<number, string>>({});
   const [msg, setMsg] = useState("");
@@ -48,28 +39,20 @@ export default function Page() {
   const [statusFilter, setStatusFilter] = useState("ALL");
 
   async function load() {
-    const [a, b, c] = await Promise.all([
+    const [a, b] = await Promise.all([
       fetch("/api/operaciones/envios", { cache: "no-store" }),
       fetch("/api/operaciones/documentos", { cache: "no-store" }),
-      fetch("/api/operaciones/usuarios", { cache: "no-store" }),
     ]);
-    if (!a.ok || !b.ok || !c.ok)
-      throw new Error("No se pudieron cargar envíos, documentos o usuarios.");
-    const [s, d, u] = await Promise.all([a.json(), b.json(), c.json()]);
+    if (!a.ok || !b.ok)
+      throw new Error("No se pudieron cargar envíos o documentos.");
+    const [s, d] = await Promise.all([a.json(), b.json()]);
     setShipments(Array.isArray(s) ? s : []);
     setDocs(Array.isArray(d) ? d : []);
-    setOperators(
-      (Array.isArray(u) ? (u as User[]) : []).filter(
-        (x) =>
-          (x.activo === true || Number(x.activo) === 1) &&
-          String(x.rol).toUpperCase() === "OPERADOR" &&
-          String(x.departamento).toUpperCase() === "TRAFICO"
-      )
-    );
     setDraft({});
   }
 
   useEffect(() => {
+    setUser(getSessionUser());
     load().catch((e) => setMsg(e.message));
   }, []);
 
@@ -134,10 +117,6 @@ export default function Page() {
   }
 
   async function save() {
-    if (!uid) {
-      setMsg("Selecciona un operador de Tráfico activo.");
-      return;
-    }
     const changes = docs.filter(
       (d) =>
         draft[d.id_documento] !== undefined &&
@@ -157,7 +136,8 @@ export default function Page() {
           body: JSON.stringify({
             id_documento: d.id_documento,
             estatus_documento: draft[d.id_documento],
-            actualizado_por: Number(uid),
+            actualizado_por: user && user.id_usuario > 0 ? user.id_usuario : null,
+            actor_nombre: user?.nombre_completo || "Sistema",
           }),
         });
         const result = await response.json();
@@ -168,7 +148,6 @@ export default function Page() {
       }
       await load();
       setExpanded(null);
-      setUid("");
       setMsg("Cambios guardados.");
     } catch (e) {
       setMsg(
@@ -199,8 +178,7 @@ export default function Page() {
         <p
           className={`message ${
             msg.toLowerCase().includes("error") ||
-            msg.toLowerCase().includes("no se pudo") ||
-            msg.toLowerCase().includes("selecciona")
+            msg.toLowerCase().includes("no se pudo")
               ? "error"
               : ""
           }`}
@@ -240,10 +218,7 @@ export default function Page() {
             {filteredShipments.map((s) => (
               <tr
                 key={s.id_envio}
-                onClick={() => {
-                  setExpanded(s.id_envio);
-                  setUid("");
-                }}
+                onClick={() => setExpanded(s.id_envio)}
                 className={expanded === s.id_envio ? "selected-row" : ""}
                 style={{ cursor: "pointer" }}
               >
@@ -254,7 +229,6 @@ export default function Page() {
                     onClick={(e) => {
                       e.stopPropagation();
                       setExpanded(s.id_envio);
-                      setUid("");
                     }}
                   >
                     {s.codigo_envio}
@@ -308,26 +282,16 @@ export default function Page() {
             </div>
 
             <label className="field">
-              Operador de Tráfico
-              <select
-                value={uid}
-                onChange={(e) => setUid(e.target.value)}
-                required
-              >
-                <option value="">Seleccionar operador de Tráfico activo</option>
-                {operators.map((u) => (
-                  <option key={u.id_usuario} value={u.id_usuario}>
-                    {u.nombre_completo}
-                  </option>
-                ))}
-              </select>
+              Responsable (Sesión activa)
+              <input
+                value={
+                  user
+                    ? `${user.nombre_completo} (${user.rol} · ${user.departamento})`
+                    : "Sin sesión"
+                }
+                readOnly
+              />
             </label>
-
-            {!operators.length && (
-              <p className="muted">
-                No hay operadores activos en el departamento TRAFICO.
-              </p>
-            )}
 
             <p className="muted">
               Los cambios permanecen pendientes hasta presionar Guardar. El
@@ -369,12 +333,7 @@ export default function Page() {
               <button
                 type="button"
                 onClick={save}
-                disabled={
-                  loading ||
-                  !uid ||
-                  !operators.length ||
-                  !changedForShipment(expanded)
-                }
+                disabled={loading || !changedForShipment(expanded)}
               >
                 {loading ? "Guardando..." : "Guardar"}
               </button>
@@ -393,4 +352,3 @@ export default function Page() {
     </section>
   );
 }
-

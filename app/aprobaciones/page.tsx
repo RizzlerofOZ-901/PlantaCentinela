@@ -1,28 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { statusClass } from "@/app/lib/session";
+import { getSessionUser, statusClass, type SessionUser } from "@/app/lib/session";
 
 type Row = Record<string, unknown>;
-type User = {
-  id_usuario: number;
-  nombre_completo: string;
-  rol: string;
-  activo: number | boolean;
-};
-
-function active(v: unknown) {
-  return v === true || Number(v) === 1;
-}
 
 function display(v: unknown) {
   return String(v ?? "—").replaceAll("_", " ");
 }
 
 export default function Page() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [uid, setUid] = useState("");
   const [comment, setComment] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
@@ -31,27 +20,18 @@ export default function Page() {
   const [statusFilter, setStatusFilter] = useState("ALL");
 
   async function load() {
-    const [shipmentResponse, userResponse] = await Promise.all([
-      fetch("/api/operaciones/envios", { cache: "no-store" }),
-      fetch("/api/operaciones/usuarios", { cache: "no-store" }),
-    ]);
-    if (!shipmentResponse.ok || !userResponse.ok)
-      throw new Error("Error cargando envíos o usuarios.");
-    const [shipments, userRows] = await Promise.all([
-      shipmentResponse.json(),
-      userResponse.json(),
-    ]);
+    const shipmentResponse = await fetch("/api/operaciones/envios", {
+      cache: "no-store",
+    });
+    if (!shipmentResponse.ok) throw new Error("Error cargando envíos.");
+    const shipments = await shipmentResponse.json();
     setRows(Array.isArray(shipments) ? shipments : []);
-    setUsers(Array.isArray(userRows) ? userRows : []);
   }
 
   useEffect(() => {
+    setUser(getSessionUser());
     load().catch((e) => setMsg(e.message));
   }, []);
-
-  const supervisors = users.filter(
-    (u) => active(u.activo) && String(u.rol).toUpperCase() === "SUPERVISOR"
-  );
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -67,8 +47,8 @@ export default function Page() {
   }, [rows, search, statusFilter]);
 
   async function decide(id: number, decision: "APROBADO" | "RECHAZADO") {
-    if (!uid) {
-      setMsg("Selecciona un supervisor activo.");
+    if (!user) {
+      setMsg("No hay una sesión activa.");
       return;
     }
     setBusy(id);
@@ -79,7 +59,9 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id_envio: id,
-          id_supervisor: Number(uid),
+          id_supervisor: user.id_usuario,
+          is_admin: Boolean(user.isAdmin),
+          actor_nombre: user.nombre_completo,
           decision,
           comentarios: comment,
         }),
@@ -107,22 +89,16 @@ export default function Page() {
 
       <div className="panel">
         <label className="field">
-          Supervisor
-          <select value={uid} onChange={(e) => setUid(e.target.value)} required>
-            <option value="">Seleccionar supervisor activo</option>
-            {supervisors.map((u) => (
-              <option key={u.id_usuario} value={u.id_usuario}>
-                {u.nombre_completo}
-              </option>
-            ))}
-          </select>
+          Supervisor (Sesión activa)
+          <input
+            value={
+              user
+                ? `${user.nombre_completo} (${user.rol} · ${user.departamento})`
+                : "Sin sesión"
+            }
+            readOnly
+          />
         </label>
-        {!supervisors.length && (
-          <p className="muted">
-            No hay supervisores activos. Revisa que el usuario tenga rol
-            SUPERVISOR y esté activo.
-          </p>
-        )}
         <label className="field">
           Comentarios
           <textarea
@@ -134,7 +110,9 @@ export default function Page() {
           <p
             className={`message ${
               msg.toLowerCase().includes("error") ||
-              msg.toLowerCase().includes("no se pudo")
+              msg.toLowerCase().includes("no se pudo") ||
+              msg.toLowerCase().includes("se requieren") ||
+              msg.toLowerCase().includes("solo un supervisor")
                 ? "error"
                 : ""
             }`}
@@ -204,7 +182,7 @@ export default function Page() {
                     <button
                       type="button"
                       className="button-approve"
-                      disabled={!uid || busy === id}
+                      disabled={!user || busy === id}
                       onClick={() => decide(id, "APROBADO")}
                     >
                       {busy === id ? "Guardando..." : "Aprobar"}
@@ -212,7 +190,7 @@ export default function Page() {
                     <button
                       type="button"
                       className="button-reject"
-                      disabled={!uid || busy === id}
+                      disabled={!user || busy === id}
                       onClick={() => decide(id, "RECHAZADO")}
                     >
                       Rechazar
@@ -234,4 +212,3 @@ export default function Page() {
     </section>
   );
 }
-

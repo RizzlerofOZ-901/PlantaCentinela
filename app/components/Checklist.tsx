@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fmtDateTime, statusClass } from "@/app/lib/session";
+import {
+  fmtDateTime,
+  getSessionUser,
+  statusClass,
+  type SessionUser,
+} from "@/app/lib/session";
 
 type Kind = "riesgo" | "inspeccion";
 type Shipment = {
@@ -16,12 +21,6 @@ type Shipment = {
   estatus_carga?: string;
   fecha_despacho_programada: string | null;
   fecha_entrega_estimada: string | null;
-};
-type User = {
-  id_usuario: number;
-  nombre_completo: string;
-  departamento: string;
-  activo: number | boolean;
 };
 type Eval = Record<string, any> & {
   id_envio: number;
@@ -44,20 +43,15 @@ const cargo: [string, string][] = [
   ["carga_asegurada", "Carga asegurada"],
 ];
 
-function active(v: unknown) {
-  return v === true || Number(v) === 1;
-}
-
 export default function Checklist({ kind }: { kind: Kind }) {
   const isRisk = kind === "riesgo",
     endpoint = isRisk ? "riesgo" : "inspeccion",
     fields = isRisk ? risk : cargo;
 
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [ship, setShip] = useState<Shipment[]>([]),
-    [records, setRecords] = useState<Eval[]>([]),
-    [inspectors, setInspectors] = useState<User[]>([]);
+    [records, setRecords] = useState<Eval[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null),
-    [uid, setUid] = useState(""),
     [checks, setChecks] = useState<Record<string, boolean>>({}),
     [notes, setNotes] = useState(""),
     [msg, setMsg] = useState(""),
@@ -67,28 +61,19 @@ export default function Checklist({ kind }: { kind: Kind }) {
   const [statusFilter, setStatusFilter] = useState("ALL");
 
   async function load() {
-    const [a, b, c] = await Promise.all([
+    const [a, b] = await Promise.all([
       fetch("/api/operaciones/envios", { cache: "no-store" }),
       fetch(`/api/operaciones/${endpoint}`, { cache: "no-store" }),
-      fetch("/api/operaciones/usuarios", { cache: "no-store" }),
     ]);
-    if (!a.ok || !b.ok || !c.ok)
-      throw new Error(
-        "No se pudieron cargar envíos, evaluaciones o inspectores."
-      );
-    const [s, r, u] = await Promise.all([a.json(), b.json(), c.json()]);
+    if (!a.ok || !b.ok)
+      throw new Error("No se pudieron cargar envíos o evaluaciones.");
+    const [s, r] = await Promise.all([a.json(), b.json()]);
     setShip(s);
     setRecords(r);
-    setInspectors(
-      (u as User[]).filter(
-        (x) =>
-          active(x.activo) &&
-          String(x.departamento).toUpperCase() === "INSPECCION"
-      )
-    );
   }
 
   useEffect(() => {
+    setUser(getSessionUser());
     load().catch((e) => setMsg(e.message));
   }, [endpoint]);
 
@@ -140,7 +125,6 @@ export default function Checklist({ kind }: { kind: Kind }) {
 
   function open(id: number) {
     setExpanded(id);
-    setUid("");
     setChecks({});
     setNotes("");
     setMsg("");
@@ -150,22 +134,21 @@ export default function Checklist({ kind }: { kind: Kind }) {
     e.preventDefault();
     const s = ship.find((x) => x.id_envio === expanded);
     if (!s) return;
-    if (!uid) {
-      setMsg("Selecciona un inspector activo.");
-      return;
-    }
+
+    const actorId = user && user.id_usuario > 0 ? user.id_usuario : null;
     setSaving(true);
     try {
       const body = {
         id_envio: s.id_envio,
         observaciones: notes,
+        actor_nombre: user?.nombre_completo || "Sistema",
         ...(isRisk
           ? {
-              id_evaluador: Number(uid),
+              id_evaluador: actorId,
               destino_evaluado: s.direccion_destino,
               distancia_km: s.distancia_km,
             }
-          : { id_inspector: Number(uid) }),
+          : { id_inspector: actorId }),
         ...Object.fromEntries(
           fields.map(([k]) => [k, checks[k] === true ? 1 : 0])
         ),
@@ -318,26 +301,16 @@ export default function Checklist({ kind }: { kind: Kind }) {
             </div>
 
             <label className="field">
-              Inspector / evaluador
-              <select
-                value={uid}
-                onChange={(e) => setUid(e.target.value)}
-                required
-              >
-                <option value="">Seleccionar inspector activo</option>
-                {inspectors.map((u) => (
-                  <option key={u.id_usuario} value={u.id_usuario}>
-                    {u.nombre_completo}
-                  </option>
-                ))}
-              </select>
+              Inspector / Evaluador (Sesión activa)
+              <input
+                value={
+                  user
+                    ? `${user.nombre_completo} (${user.rol} · ${user.departamento})`
+                    : "Sin sesión"
+                }
+                readOnly
+              />
             </label>
-
-            {!inspectors.length && (
-              <p className="muted">
-                No hay usuarios activos en el departamento INSPECCION.
-              </p>
-            )}
 
             <h3>Checklist</h3>
             <div className="checks">
@@ -364,7 +337,7 @@ export default function Checklist({ kind }: { kind: Kind }) {
             </label>
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button type="submit" disabled={saving || !inspectors.length}>
+              <button type="submit" disabled={saving}>
                 {saving ? "Guardando..." : "Guardar evaluación"}
               </button>
               <button
@@ -382,4 +355,3 @@ export default function Checklist({ kind }: { kind: Kind }) {
     </section>
   );
 }
-

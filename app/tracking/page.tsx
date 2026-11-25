@@ -2,7 +2,12 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fmtDateTime, statusClass } from "@/app/lib/session";
+import {
+  fmtDateTime,
+  getSessionUser,
+  statusClass,
+  type SessionUser,
+} from "@/app/lib/session";
 
 const TrackingMap = dynamic(() => import("./TrackingMap"), { ssr: false });
 
@@ -89,6 +94,7 @@ function formatKm(value: number | string | null | undefined): string {
 }
 
 export default function TrackingPage() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [tracking, setTracking] = useState<TrackingData | null>(null);
@@ -99,6 +105,10 @@ export default function TrackingPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+
+  useEffect(() => {
+    setUser(getSessionUser());
+  }, []);
 
   const loadShipments = useCallback(async () => {
     setLoadingShipments(true);
@@ -430,7 +440,7 @@ export default function TrackingPage() {
         </table>
       </div>
 
-      {/* MODAL OVERLAY IN FRONT OF THE TABLE (Checkpoints + Map) */}
+      {/* MODAL OVERLAY IN FRONT OF THE TABLE */}
       {selectedId !== null && selected && (
         <div
           className="modal-backdrop"
@@ -442,17 +452,34 @@ export default function TrackingPage() {
             className="centinela-card detail-panel modal-dialog modal-dialog-wide"
             onClick={(e) => e.stopPropagation()}
           >
+            {/* Proposed Header Structure */}
             <div className="detail-heading" style={{ marginBottom: "14px" }}>
-              <div>
-                <h2 style={{ margin: "0 0 2px" }}>
-                  Seguimiento — {selected.codigo_envio}
-                </h2>
-                <p className="muted" style={{ margin: 0 }}>
-                  {selected.nombre_cliente} ·{" "}
-                  {selected.codigo_trailer || "Sin trailer"}
-                </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <h2 style={{ margin: 0 }}>Seguimiento</h2>
+                <div style={{ fontSize: "14px" }}>
+                  <strong>Operador:</strong> {user?.nombre_completo || "—"}
+                </div>
+                <div style={{ fontSize: "15px" }}>
+                  <strong>Envío:</strong> {selected.codigo_envio}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "18px",
+                    fontSize: "14px",
+                  }}
+                >
+                  <span>
+                    <strong>Cliente:</strong> {selected.nombre_cliente}
+                  </span>
+                  <span>
+                    <strong>Trailer:</strong> {selected.codigo_trailer || "Sin trailer"}
+                  </span>
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                 <span className={statusClass(selected.estatus_general)}>
                   {selected.estatus_general.replaceAll("_", " ")}
                 </span>

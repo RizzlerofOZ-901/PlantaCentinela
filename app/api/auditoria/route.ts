@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const events = await db
       .collection("auditorias")
       .find(filter)
-      .sort({ fecha_evento: 1 })
+      .sort({ fecha_evento: -1 })
       .limit(500)
       .toArray();
 

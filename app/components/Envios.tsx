@@ -6,9 +6,17 @@ import {
   fmtDateTime,
   getSessionUser,
   statusClass,
+  type SessionUser,
 } from "@/app/lib/session";
 
 type Row = Record<string, any>;
+
+type DateTimeParts = {
+  date: string;
+  hour: string;
+  min: string;
+  ampm: "AM" | "PM";
+};
 
 type FormState = {
   cliente_existente: string;
@@ -16,26 +24,22 @@ type FormState = {
   direccion_destino: string;
   distancia_km: string;
   fecha_pedido: string;
-  carga_date: string;
-  carga_hour: string;
-  carga_min: string;
-  carga_ampm: "AM" | "PM";
-  creado_por: string;
+  carga: DateTimeParts;
+  despacho: DateTimeParts;
+  entrega: DateTimeParts;
 };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const emptyDT: DateTimeParts = { date: "", hour: "8", min: "00", ampm: "AM" };
 
 const blank: FormState = {
   cliente_existente: "__nuevo__",
   nombre_cliente: "",
   direccion_destino: "",
   distancia_km: "",
-  fecha_pedido: todayISO(),
-  carga_date: todayISO(),
-  carga_hour: "8",
-  carga_min: "00",
-  carga_ampm: "AM",
-  creado_por: "",
+  fecha_pedido: "",
+  carga: { ...emptyDT },
+  despacho: { ...emptyDT },
+  entrega: { ...emptyDT },
 };
 
 const TRAILERS = Array.from(
@@ -53,20 +57,26 @@ function statusLabel(value: unknown) {
   return String(value ?? "EN_ORIGEN").replaceAll("_", " ");
 }
 
-function buildDateFrom12h(
-  dateStr: string,
-  hour12: string,
-  minute: string,
-  ampm: "AM" | "PM"
-): Date | null {
-  if (!dateStr) return null;
-  const [y, m, d] = dateStr.split("-").map(Number);
+function partsToDate(p: DateTimeParts): Date | null {
+  if (!p.date) return null;
+  const [y, m, d] = p.date.split("-").map(Number);
   if (!y || !m || !d) return null;
-  let h = Number(hour12);
-  const min = Number(minute);
-  if (ampm === "PM" && h !== 12) h += 12;
-  if (ampm === "AM" && h === 12) h = 0;
+  let h = Number(p.hour);
+  const min = Number(p.min);
+  if (p.ampm === "PM" && h !== 12) h += 12;
+  if (p.ampm === "AM" && h === 12) h = 0;
   return new Date(y, m - 1, d, h, min, 0);
+}
+
+function dateToParts(dt: Date): DateTimeParts {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+  const rawHour = dt.getHours();
+  const ampm: "AM" | "PM" = rawHour >= 12 ? "PM" : "AM";
+  let hour12 = rawHour % 12;
+  if (hour12 === 0) hour12 = 12;
+  const min = pad(dt.getMinutes());
+  return { date, hour: String(hour12), min, ampm };
 }
 
 function toSqlDateTime(dt: Date | null): string | null {
@@ -78,8 +88,8 @@ function toSqlDateTime(dt: Date | null): string | null {
 }
 
 export default function Envios() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
-  const [users, setUsers] = useState<Row[]>([]);
   const [form, setForm] = useState<FormState>(blank);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -91,60 +101,18 @@ export default function Envios() {
   const [statusFilter, setStatusFilter] = useState("ALL");
 
   async function load() {
-    const [sr, ur] = await Promise.all([
-      fetch("/api/operaciones/envios", { cache: "no-store" }),
-      fetch("/api/operaciones/usuarios", { cache: "no-store" }),
-    ]);
-    if (!sr.ok || !ur.ok)
-      throw new Error("No se pudieron cargar los envíos o usuarios.");
-    const [s, u] = await Promise.all([sr.json(), ur.json()]);
+    const sr = await fetch("/api/operaciones/envios", { cache: "no-store" });
+    if (!sr.ok) throw new Error("No se pudieron cargar los envíos.");
+    const s = await sr.json();
     setRows(Array.isArray(s) ? s : []);
-    setUsers(Array.isArray(u) ? u : []);
   }
 
   useEffect(() => {
-    setAllowCreate(canCreateShipment(getSessionUser()));
+    const current = getSessionUser();
+    setUser(current);
+    setAllowCreate(canCreateShipment(current));
     load().catch((e) => setError(e.message));
   }, []);
-
-  const allowedCreators = useMemo(() => {
-    return users.filter((u) => {
-      const isActive = Number(u.activo) === 1 || u.activo === true;
-      const rol = String(u.rol ?? "").toUpperCase();
-      const dep = String(u.departamento ?? "").toUpperCase();
-      return (
-        isActive &&
-        (rol === "SUPERVISOR" || (rol === "OPERADOR" && dep === "TRAFICO"))
-      );
-    });
-  }, [users]);
-
-  const cargaDateObj = useMemo(
-    () =>
-      buildDateFrom12h(
-        form.carga_date,
-        form.carga_hour,
-        form.carga_min,
-        form.carga_ampm
-      ),
-    [form.carga_date, form.carga_hour, form.carga_min, form.carga_ampm]
-  );
-
-  const despachoDateObj = useMemo(
-    () =>
-      cargaDateObj
-        ? new Date(cargaDateObj.getTime() + 4 * 60 * 60 * 1000)
-        : null,
-    [cargaDateObj]
-  );
-
-  const entregaDateObj = useMemo(
-    () =>
-      cargaDateObj
-        ? new Date(cargaDateObj.getTime() + 8 * 60 * 60 * 1000)
-        : null,
-    [cargaDateObj]
-  );
 
   const clients = useMemo(() => {
     const map = new Map<string, Row>();
@@ -172,6 +140,7 @@ export default function Envios() {
   );
 
   const free = TRAILERS.filter((t) => !occupied.has(t)).length;
+  const noTrailers = free === 0;
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -191,6 +160,39 @@ export default function Envios() {
   function change(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     const { name, value } = e.target;
     setForm((old) => ({ ...old, [name]: value }));
+  }
+
+  // Updating Carga auto-recommends Despacho (+4h) and Entrega (+8h)
+  function updateCarga(field: keyof DateTimeParts, value: string) {
+    setForm((old) => {
+      const nextCarga = { ...old.carga, [field]: value } as DateTimeParts;
+      const cargaDt = partsToDate(nextCarga);
+      if (!cargaDt) {
+        return { ...old, carga: nextCarga };
+      }
+      const recDespacho = new Date(cargaDt.getTime() + 4 * 60 * 60 * 1000);
+      const recEntrega = new Date(cargaDt.getTime() + 8 * 60 * 60 * 1000);
+      return {
+        ...old,
+        carga: nextCarga,
+        despacho: dateToParts(recDespacho),
+        entrega: dateToParts(recEntrega),
+      };
+    });
+  }
+
+  function updateDespacho(field: keyof DateTimeParts, value: string) {
+    setForm((old) => ({
+      ...old,
+      despacho: { ...old.despacho, [field]: value } as DateTimeParts,
+    }));
+  }
+
+  function updateEntrega(field: keyof DateTimeParts, value: string) {
+    setForm((old) => ({
+      ...old,
+      entrega: { ...old.entrega, [field]: value } as DateTimeParts,
+    }));
   }
 
   function chooseClient(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -217,9 +219,39 @@ export default function Envios() {
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setLoading(true);
     setMessage("");
     setError("");
+
+    if (noTrailers) {
+      setError("No se puede crear el envío, no hay trailers disponibles");
+      return;
+    }
+
+    const cargaDt = partsToDate(form.carga);
+    const despachoDt = partsToDate(form.despacho);
+    const entregaDt = partsToDate(form.entrega);
+
+    // Date sequence logic checks
+    if (cargaDt && despachoDt && despachoDt.getTime() < cargaDt.getTime()) {
+      setError(
+        "El despacho programado no puede ser anterior a la carga programada."
+      );
+      return;
+    }
+    if (cargaDt && entregaDt && entregaDt.getTime() < cargaDt.getTime()) {
+      setError(
+        "La entrega programada no puede ser anterior a la carga programada."
+      );
+      return;
+    }
+    if (despachoDt && entregaDt && entregaDt.getTime() < despachoDt.getTime()) {
+      setError(
+        "La entrega programada no puede ser anterior al despacho programado."
+      );
+      return;
+    }
+
+    setLoading(true);
     try {
       const response = await fetch("/api/operaciones/envios", {
         method: "POST",
@@ -229,23 +261,20 @@ export default function Envios() {
           direccion_destino: form.direccion_destino.trim(),
           distancia_km: Number(form.distancia_km),
           fecha_pedido: form.fecha_pedido,
-          fecha_carga_programada: toSqlDateTime(cargaDateObj),
-          fecha_despacho_programada: toSqlDateTime(despachoDateObj),
-          fecha_entrega_estimada: toSqlDateTime(entregaDateObj),
-          creado_por: Number(form.creado_por),
+          fecha_carga_programada: toSqlDateTime(cargaDt),
+          fecha_despacho_programada: toSqlDateTime(despachoDt),
+          fecha_entrega_estimada: toSqlDateTime(entregaDt),
+          creado_por: user && user.id_usuario > 0 ? user.id_usuario : null,
+          actor_nombre: user?.nombre_completo || "Sistema",
         }),
       });
       const result = await response.json();
       if (!response.ok)
         throw new Error(result.error || "No se pudo crear el envío.");
       setMessage(
-        `Envío ${result.codigo_envio} creado con estado CREADO${
-          result.codigo_trailer
-            ? ` y trailer ${result.codigo_trailer}`
-            : " (sin trailer disponible)"
-        }.`
+        `Envío ${result.codigo_envio} creado con estado CREADO y trailer ${result.codigo_trailer}.`
       );
-      setForm({ ...blank, fecha_pedido: todayISO(), carga_date: todayISO() });
+      setForm(blank);
       setShowForm(false);
       await load();
     } catch (e) {
@@ -266,25 +295,40 @@ export default function Envios() {
         </div>
         <button
           type="button"
-          disabled={!allowCreate}
+          disabled={!allowCreate || noTrailers}
           title={
-            !allowCreate ? "Tu perfil no tiene permiso para crear envíos" : ""
+            noTrailers
+              ? "No se puede crear el envío, no hay trailers disponibles"
+              : !allowCreate
+                ? "Tu perfil no tiene permiso para crear envíos"
+                : ""
           }
-          onClick={() => setShowForm((v) => !v)}
+          onClick={() => {
+            if (noTrailers) {
+              setError("No se puede crear el envío, no hay trailers disponibles");
+              return;
+            }
+            setShowForm((v) => !v);
+          }}
         >
           {showForm ? "Cerrar formulario" : "+ Crear envío"}
         </button>
       </header>
 
+      {noTrailers && (
+        <p className="message error">
+          No se puede crear el envío, no hay trailers disponibles
+        </p>
+      )}
       {message && <p className="message">{message}</p>}
       {error && <p className="message error">{error}</p>}
 
-      {showForm && allowCreate && (
+      {showForm && allowCreate && !noTrailers && (
         <form className="panel" onSubmit={save}>
           <h2>Nuevo envío</h2>
           <p className="muted">
-            El código, trailer y estado inicial se asignan automáticamente.
-            Despacho (+4 h) y Entrega (+8 h) se calculan desde Carga programada.
+            Al elegir Carga programada se sugerirán Despacho (+4 h) y Entrega
+            (+8 h), pero puedes modificar todas las fechas y horas libremente.
           </p>
 
           <div className="formgrid">
@@ -351,20 +395,31 @@ export default function Envios() {
               />
             </label>
 
+            <label className="field">
+              Creado por (Sesión activa)
+              <input
+                value={
+                  user
+                    ? `${user.nombre_completo} (${user.rol} · ${user.departamento})`
+                    : "Sin sesión"
+                }
+                readOnly
+              />
+            </label>
+
+            {/* Carga programada (Editable 12h) */}
             <div className="field">
-              <span>Carga programada (Fecha y Hora 12h)</span>
+              <span>Carga programada</span>
               <div className="datetime-12h">
                 <input
-                  name="carga_date"
                   type="date"
-                  value={form.carga_date}
-                  onChange={change}
-                  required
+                  value={form.carga.date}
+                  onChange={(e) => updateCarga("date", e.target.value)}
                 />
                 <select
-                  name="carga_hour"
-                  value={form.carga_hour}
-                  onChange={change}
+                  value={form.carga.hour}
+                  onChange={(e) => updateCarga("hour", e.target.value)}
+                  disabled={!form.carga.date}
                 >
                   {Array.from({ length: 12 }, (_, i) => String(i + 1)).map(
                     (h) => (
@@ -375,9 +430,9 @@ export default function Envios() {
                   )}
                 </select>
                 <select
-                  name="carga_min"
-                  value={form.carga_min}
-                  onChange={change}
+                  value={form.carga.min}
+                  onChange={(e) => updateCarga("min", e.target.value)}
+                  disabled={!form.carga.date}
                 >
                   {["00", "15", "30", "45"].map((m) => (
                     <option key={m} value={m}>
@@ -386,9 +441,9 @@ export default function Envios() {
                   ))}
                 </select>
                 <select
-                  name="carga_ampm"
-                  value={form.carga_ampm}
-                  onChange={change}
+                  value={form.carga.ampm}
+                  onChange={(e) => updateCarga("ampm", e.target.value)}
+                  disabled={!form.carga.date}
                 >
                   <option value="AM">a.m.</option>
                   <option value="PM">p.m.</option>
@@ -396,36 +451,97 @@ export default function Envios() {
               </div>
             </div>
 
-            <label className="field">
-              Despacho programado (+4 horas automático)
-              <input value={fmtDateTime(despachoDateObj)} readOnly />
-            </label>
+            {/* Despacho programado (Auto +4h, Editable 12h) */}
+            <div className="field">
+              <span>Despacho programado (sugerido +4 h)</span>
+              <div className="datetime-12h">
+                <input
+                  type="date"
+                  value={form.despacho.date}
+                  onChange={(e) => updateDespacho("date", e.target.value)}
+                />
+                <select
+                  value={form.despacho.hour}
+                  onChange={(e) => updateDespacho("hour", e.target.value)}
+                  disabled={!form.despacho.date}
+                >
+                  {Array.from({ length: 12 }, (_, i) => String(i + 1)).map(
+                    (h) => (
+                      <option key={h} value={h}>
+                        {h.padStart(2, "0")}
+                      </option>
+                    )
+                  )}
+                </select>
+                <select
+                  value={form.despacho.min}
+                  onChange={(e) => updateDespacho("min", e.target.value)}
+                  disabled={!form.despacho.date}
+                >
+                  {["00", "15", "30", "45"].map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={form.despacho.ampm}
+                  onChange={(e) => updateDespacho("ampm", e.target.value)}
+                  disabled={!form.despacho.date}
+                >
+                  <option value="AM">a.m.</option>
+                  <option value="PM">p.m.</option>
+                </select>
+              </div>
+            </div>
 
-            <label className="field">
-              Entrega programada (+8 horas automático)
-              <input value={fmtDateTime(entregaDateObj)} readOnly />
-            </label>
-
-            <label className="field">
-              Creado por (Supervisor u Operador Tráfico)
-              <select
-                name="creado_por"
-                value={form.creado_por}
-                onChange={change}
-                required
-              >
-                <option value="">Seleccionar usuario</option>
-                {allowedCreators.map((u) => (
-                  <option key={u.id_usuario} value={u.id_usuario}>
-                    {u.nombre_completo} ({u.rol} - {u.departamento})
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* Entrega programada (Auto +8h, Editable 12h) */}
+            <div className="field">
+              <span>Entrega programada (sugerido +8 h)</span>
+              <div className="datetime-12h">
+                <input
+                  type="date"
+                  value={form.entrega.date}
+                  onChange={(e) => updateEntrega("date", e.target.value)}
+                />
+                <select
+                  value={form.entrega.hour}
+                  onChange={(e) => updateEntrega("hour", e.target.value)}
+                  disabled={!form.entrega.date}
+                >
+                  {Array.from({ length: 12 }, (_, i) => String(i + 1)).map(
+                    (h) => (
+                      <option key={h} value={h}>
+                        {h.padStart(2, "0")}
+                      </option>
+                    )
+                  )}
+                </select>
+                <select
+                  value={form.entrega.min}
+                  onChange={(e) => updateEntrega("min", e.target.value)}
+                  disabled={!form.entrega.date}
+                >
+                  {["00", "15", "30", "45"].map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={form.entrega.ampm}
+                  onChange={(e) => updateEntrega("ampm", e.target.value)}
+                  disabled={!form.entrega.date}
+                >
+                  <option value="AM">a.m.</option>
+                  <option value="PM">p.m.</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <p>
-            <button type="submit" disabled={loading}>
+            <button type="submit" disabled={loading || noTrailers}>
               {loading ? "Guardando..." : "Guardar envío"}
             </button>{" "}
             <button
@@ -502,5 +618,3 @@ export default function Envios() {
     </section>
   );
 }
-
-

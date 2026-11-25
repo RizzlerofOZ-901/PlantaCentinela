@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fmtDateTime } from "@/app/lib/session";
+import { fmtDateTime, getSessionUser } from "@/app/lib/session";
 
 type U = Record<string, any>;
 
@@ -48,10 +48,14 @@ export default function Page() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setMsg("");
+    const current = getSessionUser();
     const r = await fetch("/api/operaciones/usuarios", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(f),
+      body: JSON.stringify({
+        ...f,
+        actor_nombre: current?.nombre_completo || "Administrador",
+      }),
     });
     const d = await r.json();
     setMsg(r.ok ? "Usuario creado." : d.error || "Error al crear usuario.");
@@ -72,17 +76,25 @@ export default function Page() {
     const id = Number(u.id_usuario);
     if (!window.confirm(`¿Eliminar al usuario "${u.nombre_completo}"?`)) return;
 
+    const current = getSessionUser();
     setBusyId(id);
     setMsg("");
     try {
       const r = await fetch("/api/operaciones/usuarios", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id_usuario: id }),
+        body: JSON.stringify({
+          id_usuario: id,
+          actor_nombre: current?.nombre_completo || "Administrador",
+        }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "No se pudo eliminar el usuario.");
-      setMsg(`Usuario ${u.nombre_completo} eliminado.`);
+      setMsg(
+        d.softDeleted
+          ? `Usuario ${u.nombre_completo} desactivado (tiene aprobaciones registradas) y auditado en MongoDB.`
+          : `Usuario ${u.nombre_completo} eliminado y registrado en Auditoría.`
+      );
       await load();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Error al eliminar.");
@@ -238,4 +250,3 @@ export default function Page() {
     </section>
   );
 }
-

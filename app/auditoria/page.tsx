@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { fmtDateTime, statusClass } from "@/app/lib/session";
 
 type Shipment = {
   id_envio: number;
@@ -26,34 +27,6 @@ type AuditEvent = {
   detalles?: Record<string, any>;
 };
 
-function fmtDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("es-MX", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
-}
-
-function statusClass(value: unknown): string {
-  const s = String(value ?? "").toUpperCase().replaceAll(" ", "_");
-  if (["ENTREGADO", "LISTO", "APROBADO", "EXCELENTE", "BUENO", "ALCANZADO", "ACTIVO"].includes(s)) {
-    return "status-pill status-green";
-  }
-  if (["EN_TRANSITO", "CARGANDO", "EN_ORIGEN", "EN_PROGRESO", "PENDIENTE", "ACEPTABLE", "CREADO"].includes(s)) {
-    return "status-pill status-yellow";
-  }
-  if (["RECHAZADO", "CANCELADO", "RETRASADO", "MALO", "RETRABAJO", "ELIMINADO"].includes(s)) {
-    return "status-pill status-red";
-  }
-  if (["DESVIO"].includes(s)) {
-    return "status-pill status-orange";
-  }
-  return "status-pill status-neutral";
-}
-
 const AUDIT_SECTIONS: { key: string; title: string }[] = [
   { key: "DOCUMENTOS", title: "Documentos" },
   { key: "INSPECCION_CARGA", title: "Inspección de mercancía" },
@@ -71,6 +44,20 @@ export default function AuditoriaPage() {
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [msg, setMsg] = useState("");
 
+  const loadUserEvents = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auditoria?modulo=USUARIOS", {
+        cache: "no-store",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Error consultando usuarios.");
+      const list = Array.isArray(d) ? d : [];
+      setUserEvents([...list].reverse());
+    } catch {
+      setMsg("No se pudo cargar la auditoría de usuarios.");
+    }
+  }, []);
+
   useEffect(() => {
     fetch("/api/operaciones/envios", { cache: "no-store" })
       .then((r) => r.json())
@@ -80,11 +67,8 @@ export default function AuditoriaPage() {
 
   useEffect(() => {
     if (tab !== "usuarios") return;
-    fetch("/api/auditoria?modulo=USUARIOS", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => setUserEvents(Array.isArray(d) ? d : []))
-      .catch(() => setMsg("No se pudo cargar la auditoría de usuarios."));
-  }, [tab]);
+    loadUserEvents();
+  }, [tab, loadUserEvents]);
 
   useEffect(() => {
     if (!selected) return;
@@ -139,6 +123,11 @@ export default function AuditoriaPage() {
           >
             Auditoría de Usuarios
           </button>
+          {tab === "usuarios" && (
+            <button type="button" className="secondary" onClick={loadUserEvents}>
+              Actualizar
+            </button>
+          )}
         </div>
       </header>
 
@@ -161,7 +150,9 @@ export default function AuditoriaPage() {
                 <tr
                   key={s.id_envio}
                   onClick={() => openAudit(s)}
-                  className={selected?.id_envio === s.id_envio ? "selected-row" : ""}
+                  className={
+                    selected?.id_envio === s.id_envio ? "selected-row" : ""
+                  }
                   style={{ cursor: "pointer" }}
                 >
                   <td>
@@ -208,6 +199,7 @@ export default function AuditoriaPage() {
                 <th>Departamento</th>
                 <th>Activo</th>
                 <th>Acción</th>
+                <th>Responsable</th>
                 <th>Fecha y hora</th>
               </tr>
             </thead>
@@ -225,12 +217,13 @@ export default function AuditoriaPage() {
                       {ev.accion.replaceAll("_", " ")}
                     </span>
                   </td>
+                  <td>{ev.actor || "Administrador"}</td>
                   <td>{fmtDateTime(ev.fecha_evento)}</td>
                 </tr>
               ))}
               {!userEvents.length && (
                 <tr>
-                  <td colSpan={8} className="muted">
+                  <td colSpan={9} className="muted">
                     Sin eventos de usuarios registrados en MongoDB todavía.
                   </td>
                 </tr>
@@ -240,7 +233,6 @@ export default function AuditoriaPage() {
         </div>
       )}
 
-      {/* MODAL OVERLAY IN FRONT OF THE TABLE */}
       {selected && (
         <div
           className="modal-backdrop"
@@ -264,7 +256,6 @@ export default function AuditoriaPage() {
               </button>
             </div>
 
-            {/* 2-COLUMN SUMMARY HEADER */}
             <div className="audit-meta-grid">
               <div>
                 <strong>Envío:</strong> {selected.codigo_envio}
@@ -283,7 +274,8 @@ export default function AuditoriaPage() {
                 {fmtDateTime(selected.fecha_despacho_programada)}
               </div>
               <div>
-                <strong>Trailer:</strong> {selected.codigo_trailer || "Sin asignar"}
+                <strong>Trailer:</strong>{" "}
+                {selected.codigo_trailer || "Sin asignar"}
               </div>
               <div>
                 <strong>Entrega programada:</strong>{" "}
@@ -294,7 +286,6 @@ export default function AuditoriaPage() {
               </div>
             </div>
 
-            {/* 1-COLUMN AUDIT TIMELINE BY MODULE */}
             {loadingEvents ? (
               <p className="muted">Cargando historial desde MongoDB...</p>
             ) : (
@@ -329,7 +320,8 @@ export default function AuditoriaPage() {
                                 </div>
                               )}
                               <div>
-                                <strong>Actualización:</strong> {ev.actualizacion}
+                                <strong>Actualización:</strong>{" "}
+                                {ev.actualizacion}
                               </div>
                             </div>
                           ))}

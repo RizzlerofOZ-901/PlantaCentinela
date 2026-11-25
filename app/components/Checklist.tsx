@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { fmtDateTime, statusClass } from "@/app/lib/session";
 
 type Kind = "riesgo" | "inspeccion";
 type Shipment = {
@@ -11,6 +12,8 @@ type Shipment = {
   distancia_km: number;
   codigo_trailer: string | null;
   estatus_general: string;
+  estatus_ruta?: string;
+  estatus_carga?: string;
   fecha_despacho_programada: string | null;
   fecha_entrega_estimada: string | null;
 };
@@ -41,13 +44,6 @@ const cargo: [string, string][] = [
   ["carga_asegurada", "Carga asegurada"],
 ];
 
-function date(v: unknown) {
-  if (!v) return "—";
-  const s = String(v).slice(0, 10),
-    p = s.split("-");
-  return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : s;
-}
-
 function active(v: unknown) {
   return v === true || Number(v) === 1;
 }
@@ -56,6 +52,7 @@ export default function Checklist({ kind }: { kind: Kind }) {
   const isRisk = kind === "riesgo",
     endpoint = isRisk ? "riesgo" : "inspeccion",
     fields = isRisk ? risk : cargo;
+
   const [ship, setShip] = useState<Shipment[]>([]),
     [records, setRecords] = useState<Eval[]>([]),
     [inspectors, setInspectors] = useState<User[]>([]);
@@ -65,6 +62,9 @@ export default function Checklist({ kind }: { kind: Kind }) {
     [notes, setNotes] = useState(""),
     [msg, setMsg] = useState(""),
     [saving, setSaving] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
 
   async function load() {
     const [a, b, c] = await Promise.all([
@@ -92,7 +92,6 @@ export default function Checklist({ kind }: { kind: Kind }) {
     load().catch((e) => setMsg(e.message));
   }, [endpoint]);
 
-  // Close modal with Escape key
   useEffect(() => {
     if (expanded === null) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -112,6 +111,32 @@ export default function Checklist({ kind }: { kind: Kind }) {
     }
     return m;
   }, [records]);
+
+  function evalStatus(s: Shipment): string {
+    const rec = latest.get(s.id_envio);
+    if (isRisk) {
+      return String(
+        rec?.resultado_ruta || s.estatus_ruta || "PENDIENTE"
+      ).toUpperCase();
+    }
+    return String(
+      rec?.resultado_carga || s.estatus_carga || "PENDIENTE"
+    ).toUpperCase();
+  }
+
+  const filteredShip = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return ship.filter((s) => {
+      const st = evalStatus(s);
+      if (statusFilter !== "ALL" && st !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        s.codigo_envio.toLowerCase().includes(q) ||
+        s.nombre_cliente.toLowerCase().includes(q) ||
+        String(s.codigo_trailer ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [ship, latest, search, statusFilter]);
 
   function open(id: number) {
     setExpanded(id);
@@ -169,6 +194,10 @@ export default function Checklist({ kind }: { kind: Kind }) {
       ? ship.find((s) => s.id_envio === expanded) ?? null
       : null;
 
+  const filterOptions = isRisk
+    ? ["PENDIENTE", "EXCELENTE", "BUENO", "ACEPTABLE", "MALO"]
+    : ["PENDIENTE", "EXCELENTE", "BUENO", "RETRABAJO"];
+
   return (
     <section>
       <header>
@@ -182,7 +211,26 @@ export default function Checklist({ kind }: { kind: Kind }) {
 
       {msg && <p className="message">{msg}</p>}
 
-      {/* SHIPMENTS TABLE */}
+      <div className="filter-bar">
+        <input
+          type="text"
+          placeholder="Buscar por envío, cliente o trailer..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+        >
+          <option value="ALL">Todos los estatus</option>
+          {filterOptions.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="panel responsive-table">
         <table>
           <thead>
@@ -190,53 +238,54 @@ export default function Checklist({ kind }: { kind: Kind }) {
               <th>Envío</th>
               <th>Cliente</th>
               <th>Trailer</th>
-              <th>Estado general</th>
+              <th>{isRisk ? "Estatus de ruta" : "Estatus de inspección"}</th>
               <th>Despacho</th>
               <th>Entrega</th>
             </tr>
           </thead>
           <tbody>
-            {ship.map((s) => (
-              <tr
-                key={s.id_envio}
-                onClick={() => open(s.id_envio)}
-                className={expanded === s.id_envio ? "selected-row" : ""}
-                style={{ cursor: "pointer" }}
-              >
-                <td>
-                  <button
-                    type="button"
-                    className="table-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      open(s.id_envio);
-                    }}
-                  >
-                    {s.codigo_envio}
-                  </button>
-                </td>
-                <td>{s.nombre_cliente}</td>
-                <td>{s.codigo_trailer || "Sin asignar"}</td>
-                <td>
-                  {String(s.estatus_general || "EN_ORIGEN").replaceAll(
-                    "_",
-                    " "
-                  )}
-                </td>
-                <td>{date(s.fecha_despacho_programada)}</td>
-                <td>{date(s.fecha_entrega_estimada)}</td>
-              </tr>
-            ))}
-            {!ship.length && (
+            {filteredShip.map((s) => {
+              const st = evalStatus(s);
+              return (
+                <tr
+                  key={s.id_envio}
+                  onClick={() => open(s.id_envio)}
+                  className={expanded === s.id_envio ? "selected-row" : ""}
+                  style={{ cursor: "pointer" }}
+                >
+                  <td>
+                    <button
+                      type="button"
+                      className="table-link"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        open(s.id_envio);
+                      }}
+                    >
+                      {s.codigo_envio}
+                    </button>
+                  </td>
+                  <td>{s.nombre_cliente}</td>
+                  <td>{s.codigo_trailer || "Sin asignar"}</td>
+                  <td>
+                    <span className={statusClass(st)}>{st}</span>
+                  </td>
+                  <td>{fmtDateTime(s.fecha_despacho_programada)}</td>
+                  <td>{fmtDateTime(s.fecha_entrega_estimada)}</td>
+                </tr>
+              );
+            })}
+            {!filteredShip.length && (
               <tr>
-                <td colSpan={6}>Todavía no hay envíos.</td>
+                <td colSpan={6} className="muted">
+                  No se encontraron envíos con esos filtros.
+                </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {/* MODAL OVERLAY IN FRONT OF THE TABLE */}
       {expanded !== null && activeShipment && (
         <div
           className="modal-backdrop"
@@ -286,8 +335,7 @@ export default function Checklist({ kind }: { kind: Kind }) {
 
             {!inspectors.length && (
               <p className="muted">
-                No hay usuarios activos en el departamento INSPECCION. Activa o
-                asigna un usuario a ese departamento.
+                No hay usuarios activos en el departamento INSPECCION.
               </p>
             )}
 
@@ -315,11 +363,6 @@ export default function Checklist({ kind }: { kind: Kind }) {
               />
             </label>
 
-            <p className="muted">
-              El estado general cambia automáticamente a CARGANDO al guardar una
-              evaluación, salvo que el envío ya esté en tránsito o entregado.
-            </p>
-
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button type="submit" disabled={saving || !inspectors.length}>
                 {saving ? "Guardando..." : "Guardar evaluación"}
@@ -339,3 +382,4 @@ export default function Checklist({ kind }: { kind: Kind }) {
     </section>
   );
 }
+

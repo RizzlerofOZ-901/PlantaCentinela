@@ -30,11 +30,18 @@ export default function SignInPage() {
     setLoading(true);
 
     try {
-      // Master Administrator shortcut
+      const res = await fetch("/api/operaciones/usuarios", { cache: "no-store" });
+      if (!res.ok) throw new Error("No se pudo validar el usuario.");
+      const users: DbUser[] = await res.json();
+
+      // Master Administrator shortcut (uses real DB id_usuario if registered)
       if (typed.toLowerCase() === "rizzlerofoz") {
+        const dbMatch = users.find(
+          (u) => u.nombre_completo.trim().toLowerCase() === "rizzlerofoz"
+        );
         setSessionUser({
-          id_usuario: 0,
-          nombre_completo: "RizzlerofOz",
+          id_usuario: dbMatch ? dbMatch.id_usuario : 0,
+          nombre_completo: dbMatch ? dbMatch.nombre_completo : "RizzlerofOz",
           rol: "ADMINISTRADOR",
           departamento: "ADMINISTRACION",
           isAdmin: true,
@@ -42,10 +49,6 @@ export default function SignInPage() {
         router.push("/inicio");
         return;
       }
-
-      const res = await fetch("/api/operaciones/usuarios", { cache: "no-store" });
-      if (!res.ok) throw new Error("No se pudo validar el usuario.");
-      const users: DbUser[] = await res.json();
 
       const match = users.find(
         (u) => u.nombre_completo.trim().toLowerCase() === typed.toLowerCase()
@@ -161,4 +164,3 @@ export default function SignInPage() {
     </section>
   );
 }
-

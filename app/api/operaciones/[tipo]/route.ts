@@ -135,8 +135,20 @@ function toDateTime(value: unknown): string | null {
   return raw.length === 10 ? `${raw} 00:00:00` : raw.replace("T", " ");
 }
 
-async function getUserName(userId: number | null | undefined): Promise<string> {
-  if (!userId) return "Sistema";
+function parseSqlDate(value: string | null): number | null {
+  if (!value) return null;
+  const dt = new Date(value.replace(" ", "T"));
+  return Number.isNaN(dt.getTime()) ? null : dt.getTime();
+}
+
+async function getUserName(
+  userId: number | null | undefined,
+  fallbackName?: unknown
+): Promise<string> {
+  if (typeof fallbackName === "string" && fallbackName.trim()) {
+    return fallbackName.trim();
+  }
+  if (!userId || userId <= 0) return "Sistema";
   const [rows] = await pool.execute<RowDataPacket[]>(
     "SELECT nombre_completo FROM usuarios WHERE id_usuario = ? LIMIT 1",
     [userId]
@@ -279,7 +291,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       await logAuditEvent({
         modulo: "USUARIOS",
         accion: "USUARIO_CREADO",
-        actor: "Administrador",
+        actor: String(body.actor_nombre || "Administrador"),
         estatus: activoVal === 1 ? "ACTIVO" : "INACTIVO",
         actualizacion: `Usuario creado: ${String(body.nombre_completo)} (${String(body.rol)} - ${String(body.departamento)})`,
         detalles: {
@@ -302,7 +314,6 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         "direccion_destino",
         "distancia_km",
         "fecha_pedido",
-        "creado_por",
       ];
       if (
         required.some(
@@ -313,17 +324,44 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         )
       ) {
         return fail(
-          "Cliente, destino, distancia, fecha del pedido y creador son obligatorios."
+          "Cliente, destino, distancia y fecha del pedido son obligatorios."
         );
       }
 
       const distance = Number(body.distancia_km);
-      const creator = Number(body.creado_por);
+      const rawCreator = body.creado_por ? Number(body.creado_por) : null;
+      const creatorId =
+        rawCreator && Number.isInteger(rawCreator) && rawCreator > 0
+          ? rawCreator
+          : null;
 
       if (!Number.isFinite(distance) || distance < 0)
         return fail("La distancia debe ser un número igual o mayor que cero.");
-      if (!Number.isInteger(creator) || creator <= 0)
-        return fail("Selecciona un usuario creador válido.");
+
+      // Date sequence validation
+      const cargaSql = toDateTime(body.fecha_carga_programada);
+      const despachoSql = toDateTime(body.fecha_despacho_programada);
+      const entregaSql = toDateTime(body.fecha_entrega_estimada);
+
+      const cargaMs = parseSqlDate(cargaSql);
+      const despachoMs = parseSqlDate(despachoSql);
+      const entregaMs = parseSqlDate(entregaSql);
+
+      if (cargaMs !== null && despachoMs !== null && despachoMs < cargaMs) {
+        return fail(
+          "El despacho programado no puede ser anterior a la carga programada."
+        );
+      }
+      if (cargaMs !== null && entregaMs !== null && entregaMs < cargaMs) {
+        return fail(
+          "La entrega programada no puede ser anterior a la carga programada."
+        );
+      }
+      if (despachoMs !== null && entregaMs !== null && entregaMs < despachoMs) {
+        return fail(
+          "La entrega programada no puede ser anterior al despacho programado."
+        );
+      }
 
       const connection = await pool.getConnection();
       let trailerLockAcquired = false;
@@ -351,6 +389,15 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         );
         const trailer = TRAILERS.find((item) => !occupied.has(item)) ?? null;
 
+        // Enforce 10-trailer capacity limit
+        if (!trailer) {
+          await connection.rollback();
+          return fail(
+            "No se puede crear el envío, no hay trailers disponibles",
+            400
+          );
+        }
+
         const year = new Date().getFullYear();
         const [sequenceRows] = await connection.query<RowDataPacket[]>(
           `SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(codigo_envio, '-', -1) AS UNSIGNED)), 0) + 1 AS next_number
@@ -376,16 +423,16 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
             trailer,
             "CREADO",
             toDateTime(body.fecha_pedido),
-            toDateTime(body.fecha_carga_programada),
-            toDateTime(body.fecha_despacho_programada),
-            toDateTime(body.fecha_entrega_estimada),
-            creator,
+            cargaSql,
+            despachoSql,
+            entregaSql,
+            creatorId,
           ]
         );
 
         await connection.commit();
 
-        const creatorName = await getUserName(creator);
+        const creatorName = await getUserName(creatorId, body.actor_nombre);
         await logAuditEvent({
           modulo: "ENVIO",
           accion: "ENVIO_CREADO",
@@ -393,7 +440,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
           codigo_envio: code,
           actor: creatorName,
           estatus: "CREADO",
-          actualizacion: `Envío ${code} creado para ${String(body.nombre_cliente).trim()}${trailer ? ` (Trailer ${trailer})` : " (Sin trailer)"}`,
+          actualizacion: `Envío ${code} creado para ${String(body.nombre_cliente).trim()} (Trailer ${trailer})`,
         });
 
         return NextResponse.json(
@@ -414,6 +461,14 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
 
     const data = pickFields(body, table.fields);
+
+    // Clean zero/invalid optional FK IDs to null for riesgo / inspeccion
+    if (tipo === "riesgo" && (!data.id_evaluador || Number(data.id_evaluador) <= 0)) {
+      data.id_evaluador = null;
+    }
+    if (tipo === "inspeccion" && (!data.id_inspector || Number(data.id_inspector) <= 0)) {
+      data.id_inspector = null;
+    }
 
     if (tipo === "documentos") {
       const validDocuments = ["BOL", "FACTURA", "CARTA_PORTE", "LISTA_EMPAQUE"];
@@ -445,19 +500,34 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
 
     if (tipo === "aprobaciones") {
-      const supervisorId = Number(data.id_supervisor);
+      const isAdmin = body.is_admin === true;
+      let supervisorId = Number(data.id_supervisor || 0);
       const shipmentId = Number(data.id_envio);
 
-      const [supervisors] = await pool.execute<RowDataPacket[]>(
-        "SELECT rol, activo FROM usuarios WHERE id_usuario = ?",
-        [supervisorId]
-      );
-      if (
-        !supervisors.length ||
-        supervisors[0].rol !== "SUPERVISOR" ||
-        !supervisors[0].activo
-      ) {
-        return fail("Solo un supervisor activo puede decidir.", 403);
+      if (isAdmin) {
+        // Ensure a valid FK user ID exists for MariaDB aprobaciones.id_supervisor
+        if (supervisorId <= 0) {
+          const [anyUser] = await pool.execute<RowDataPacket[]>(
+            "SELECT id_usuario FROM usuarios WHERE activo = 1 ORDER BY (rol = 'SUPERVISOR') DESC, id_usuario ASC LIMIT 1"
+          );
+          if (!anyUser.length) {
+            return fail("No hay usuarios activos en la base de datos.", 400);
+          }
+          supervisorId = Number(anyUser[0].id_usuario);
+        }
+        data.id_supervisor = supervisorId;
+      } else {
+        const [supervisors] = await pool.execute<RowDataPacket[]>(
+          "SELECT rol, activo FROM usuarios WHERE id_usuario = ?",
+          [supervisorId]
+        );
+        if (
+          !supervisors.length ||
+          !["SUPERVISOR", "AUDITOR"].includes(String(supervisors[0].rol).toUpperCase()) ||
+          !supervisors[0].activo
+        ) {
+          return fail("Solo un supervisor o administrador activo puede decidir.", 403);
+        }
       }
 
       const [shipments] = await pool.execute<RowDataPacket[]>(
@@ -507,7 +577,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       const shipmentId = Number(data.id_envio);
       const [code, inspectorName, [riskRows]] = await Promise.all([
         getShipmentCode(shipmentId),
-        getUserName(Number(data.id_evaluador)),
+        getUserName(
+          data.id_evaluador ? Number(data.id_evaluador) : null,
+          body.actor_nombre
+        ),
         pool.execute<RowDataPacket[]>(
           "SELECT resultado_ruta FROM riesgos_ruta WHERE id_riesgo = ? LIMIT 1",
           [result.insertId]
@@ -542,7 +615,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       const shipmentId = Number(data.id_envio);
       const [code, inspectorName, [inspRows]] = await Promise.all([
         getShipmentCode(shipmentId),
-        getUserName(Number(data.id_inspector)),
+        getUserName(
+          data.id_inspector ? Number(data.id_inspector) : null,
+          body.actor_nombre
+        ),
         pool.execute<RowDataPacket[]>(
           "SELECT resultado_carga FROM inspecciones_carga WHERE id_inspeccion = ? LIMIT 1",
           [result.insertId]
@@ -602,7 +678,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
       const [code, supervisorName] = await Promise.all([
         getShipmentCode(shipmentId),
-        getUserName(Number(data.id_supervisor)),
+        getUserName(Number(data.id_supervisor), body.actor_nombre),
       ]);
       const decision = String(data.decision);
 
@@ -649,6 +725,14 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
       return fail(`Falta un ${table.pk} válido.`);
 
     const data = pickFields(body, table.fields);
+    if (
+      tipo === "documentos" &&
+      "actualizado_por" in data &&
+      (!data.actualizado_por || Number(data.actualizado_por) <= 0)
+    ) {
+      data.actualizado_por = null;
+    }
+
     const keys = Object.keys(data);
     if (!keys.length) return fail("No hay campos válidos para actualizar.");
 
@@ -693,7 +777,10 @@ export async function PUT(request: NextRequest, { params }: RouteContext) {
 
       const [code, actorName] = await Promise.all([
         getShipmentCode(shipmentId),
-        getUserName(data.actualizado_por ? Number(data.actualizado_por) : null),
+        getUserName(
+          data.actualizado_por ? Number(data.actualizado_por) : null,
+          body.actor_nombre
+        ),
       ]);
 
       await logAuditEvent({
@@ -725,6 +812,8 @@ export async function DELETE(request: NextRequest, { params }: RouteContext) {
     return fail("Eliminación solo habilitada para usuarios.", 405);
   }
 
+  const connection = await pool.getConnection();
+
   try {
     const body = (await request.json()) as RequestBody;
     const userId = Number(body.id_usuario);
@@ -732,30 +821,86 @@ export async function DELETE(request: NextRequest, { params }: RouteContext) {
       return fail("id_usuario inválido.");
     }
 
-    const [rows] = await pool.execute<RowDataPacket[]>(
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute<RowDataPacket[]>(
       "SELECT id_usuario, nombre_completo, correo, rol, departamento, activo, fecha_creacion FROM usuarios WHERE id_usuario = ?",
       [userId]
     );
-    if (!rows.length) return fail("Usuario no encontrado.", 404);
-
-    await pool.execute("DELETE FROM usuarios WHERE id_usuario = ?", [userId]);
+    if (!rows.length) {
+      await connection.rollback();
+      return fail("Usuario no encontrado.", 404);
+    }
 
     const u = rows[0];
+
+    // Check if user has historical approvals (id_supervisor is NOT NULL)
+    const [approvalRows] = await connection.execute<RowDataPacket[]>(
+      "SELECT COUNT(*) AS cnt FROM aprobaciones WHERE id_supervisor = ?",
+      [userId]
+    );
+    const hasApprovals = Number(approvalRows[0]?.cnt ?? 0) > 0;
+
+    let softDeleted = false;
+
+    if (hasApprovals) {
+      // Deactivate instead of hard delete to preserve approval history
+      await connection.execute(
+        "UPDATE usuarios SET activo = 0 WHERE id_usuario = ?",
+        [userId]
+      );
+      softDeleted = true;
+    } else {
+      // Detach nullable references so hard delete succeeds cleanly
+      await connection.execute(
+        "UPDATE envios SET creado_por = NULL WHERE creado_por = ?",
+        [userId]
+      );
+      await connection.execute(
+        "UPDATE documentos SET actualizado_por = NULL WHERE actualizado_por = ?",
+        [userId]
+      );
+      await connection.execute(
+        "UPDATE riesgos_ruta SET id_evaluador = NULL WHERE id_evaluador = ?",
+        [userId]
+      );
+      await connection.execute(
+        "UPDATE inspecciones_carga SET id_inspector = NULL WHERE id_inspector = ?",
+        [userId]
+      );
+      await connection.execute("DELETE FROM usuarios WHERE id_usuario = ?", [
+        userId,
+      ]);
+    }
+
+    await connection.commit();
+
+    // Always log to MongoDB after commit
     await logAuditEvent({
       modulo: "USUARIOS",
-      accion: "USUARIO_ELIMINADO",
-      actor: "Administrador",
+      accion: softDeleted ? "USUARIO_DESACTIVADO" : "USUARIO_ELIMINADO",
+      actor: String(body.actor_nombre || "Administrador"),
       estatus: "ELIMINADO",
-      actualizacion: `Usuario eliminado: ${u.nombre_completo} (${u.rol} - ${u.departamento})`,
-      detalles: { ...u },
+      actualizacion: softDeleted
+        ? `Usuario desactivado (con historial de aprobaciones): ${u.nombre_completo} (${u.rol} - ${u.departamento})`
+        : `Usuario eliminado: ${u.nombre_completo} (${u.rol} - ${u.departamento})`,
+      detalles: {
+        id_usuario: u.id_usuario,
+        nombre_completo: u.nombre_completo,
+        correo: u.correo,
+        rol: u.rol,
+        departamento: u.departamento,
+        activo: 0,
+        fecha_creacion: u.fecha_creacion,
+      },
     });
 
-    return NextResponse.json({ deleted: true });
+    return NextResponse.json({ deleted: true, softDeleted });
   } catch (error) {
+    await connection.rollback();
     console.error("DELETE user error:", error);
-    return fail(
-      "No se pudo eliminar el usuario (puede tener registros vinculados).",
-      500
-    );
+    return fail("No se pudo eliminar el usuario.", 500);
+  } finally {
+    connection.release();
   }
 }

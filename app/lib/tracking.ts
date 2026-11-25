@@ -210,6 +210,39 @@ export function getPositionOnRoute(route: LatLng[], targetKm: number): LatLng {
 }
 
 /**
+ * Returns the exact polyline prefix from Origin (0 km) up to `targetKm`,
+ * ending at the truck's current position.
+ */
+export function sliceRouteUpToDistance(
+  route: LatLng[],
+  targetKm: number
+): LatLng[] {
+  if (!route.length) return [];
+  if (targetKm <= 0) return [route[0]];
+
+  const prefix: LatLng[] = [route[0]];
+  let accumulated = 0;
+
+  for (let i = 1; i < route.length; i++) {
+    const segment = haversine(route[i - 1], route[i]);
+
+    if (accumulated + segment >= targetKm) {
+      const ratio = segment === 0 ? 0 : (targetKm - accumulated) / segment;
+      prefix.push([
+        route[i - 1][0] + (route[i][0] - route[i - 1][0]) * ratio,
+        route[i - 1][1] + (route[i][1] - route[i - 1][1]) * ratio,
+      ]);
+      return prefix;
+    }
+
+    prefix.push(route[i]);
+    accumulated += segment;
+  }
+
+  return prefix;
+}
+
+/**
  * Finds the distance along `route` closest to `clickedPoint`.
  */
 export function findNearestRouteDistanceKm(
@@ -239,7 +272,6 @@ export function findNearestRouteDistanceKm(
  */
 function minDistanceToRouteKm(route: LatLng[], target: LatLng): number {
   let minD = Infinity;
-  // Sample every few vertices for fast checking on long routes
   const step = Math.max(1, Math.floor(route.length / 250));
   for (let i = 0; i < route.length; i += step) {
     const d = haversine(route[i], target);
@@ -297,9 +329,6 @@ export async function recalculateAvoidingZone(
   const nearest = findNearestRouteDistanceKm(activeRoute, clickedPoint);
   const directKm = haversine(currentPosition, destination);
 
-  // Pick up to 4 real highway bypass hubs (West & East corridors) that are:
-  // 1) At least 18 km away from the blocked point
-  // 2) Not behind the truck by an excessive margin
   const rankedHubs = BYPASS_HUBS.filter(
     (hub) => haversine(hub.point, nearest.point) >= 18
   )
@@ -315,8 +344,6 @@ export async function recalculateAvoidingZone(
     getRoadRoute([currentPosition, hub.point, destination])
   );
 
-  // If remaining distance is safely below ORS's 150 km avoid_polygons cap,
-  // also try a direct polygon-avoidance detour in parallel.
   if (directKm < 115) {
     const poly = buildCorridorPolygon(
       activeRoute,
@@ -333,7 +360,6 @@ export async function recalculateAvoidingZone(
 
   for (const res of settled) {
     if (res.status === "fulfilled" && res.value.coordinates.length >= 2) {
-      // Ensure the alternative route actually steers clear of the blocked point (>= 3.5 km away)
       const clearanceKm = minDistanceToRouteKm(
         res.value.coordinates,
         nearest.point
@@ -345,7 +371,6 @@ export async function recalculateAvoidingZone(
   }
 
   if (validDetours.length > 0) {
-    // Pick the shortest valid alternative route
     validDetours.sort((a, b) => a.distanceKm - b.distanceKm);
     return {
       route: validDetours[0],
@@ -354,15 +379,14 @@ export async function recalculateAvoidingZone(
     };
   }
 
-  // No alternative route available -> caller applies 10-second traffic delay
   return null;
 }
 
 /**
  * Generates checkpoints:
- * - #1: 0 km (Origin)
- * - Every 30 km: resolved city name (e.g. "Sabinas Hidalgo, NL")
- * - Final: total distance (Client Name)
+ * - #1: 0 km (Origin) on initial creation
+ * - Every 30 km (cumulative): resolved city name (e.g. "Sabinas Hidalgo, NL")
+ * - Final: total cumulative trip distance (Client Name)
  */
 export async function rebuildTrackingCheckpoints(
   shipmentId: number,
@@ -371,7 +395,8 @@ export async function rebuildTrackingCheckpoints(
   clientName: string,
   originLabel = ORIGIN_LABEL,
   startNumber = 1,
-  markOriginReached = true
+  markOriginReached = true,
+  baseDistanceKm = 0
 ): Promise<void> {
   if (!Array.isArray(routeCoordinates) || routeCoordinates.length < 2) {
     throw new Error("No se puede crear checkpoints: ruta inválida.");
@@ -386,8 +411,8 @@ export async function rebuildTrackingCheckpoints(
   > = [];
   let num = startNumber;
 
-  // Checkpoint 1: Origin (0 km)
-  if (startNumber === 1) {
+  // Checkpoint 1: Origin (0 km) only on initial route creation
+  if (startNumber === 1 && baseDistanceKm === 0) {
     const [oLat, oLng] = routeCoordinates[0];
     rows.push([
       shipmentId,
@@ -402,14 +427,25 @@ export async function rebuildTrackingCheckpoints(
     ]);
   }
 
-  // Intermediate checkpoints every 30 km
-  for (let km = 30; km < distanceKm - 10; km += 30) {
-    const [lat, lng] = pointAtDistance(routeCoordinates, km);
+  const totalTripKm = baseDistanceKm + distanceKm;
+  // Next 30 km multiple ahead of current cumulative progress
+  const firstStepKm =
+    baseDistanceKm > 0
+      ? Math.ceil((baseDistanceKm + 1) / 30) * 30
+      : 30;
+
+  for (
+    let cumulativeKm = firstStepKm;
+    cumulativeKm < totalTripKm - 10;
+    cumulativeKm += 30
+  ) {
+    const distanceAlongDetour = cumulativeKm - baseDistanceKm;
+    const [lat, lng] = pointAtDistance(routeCoordinates, distanceAlongDetour);
     const cityName = resolveCityName(lat, lng);
     rows.push([
       shipmentId,
       num++,
-      km,
+      cumulativeKm,
       lat,
       lng,
       cityName,
@@ -419,13 +455,13 @@ export async function rebuildTrackingCheckpoints(
     ]);
   }
 
-  // Final checkpoint: Destination (Client Name)
+  // Final checkpoint: Destination at total cumulative trip distance
   const [dLat, dLng] = routeCoordinates[routeCoordinates.length - 1];
   const destCity = resolveCityName(dLat, dLng);
   rows.push([
     shipmentId,
     num++,
-    Number(distanceKm.toFixed(2)),
+    Number(totalTripKm.toFixed(2)),
     dLat,
     dLng,
     `${clientName} (${destCity})`,

@@ -966,3 +966,66 @@ tbody tr.selected-row {
     grid-template-columns: 1fr;
   }
 }
+
+/* =========================================================
+   UPGRADES: BLUE STATUS, FILTERS, 12H PICKER & WIDE MODAL
+   ========================================================= */
+.status-blue {
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.datetime-12h {
+  display: grid;
+  grid-template-columns: minmax(135px, 1.4fr) repeat(3, minmax(64px, 0.7fr));
+  gap: 6px;
+}
+
+.sidebar-user-badge {
+  margin: 0 14px 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: center;
+}
+
+.sidebar-user-badge strong {
+  font-size: 14px;
+  color: #ffffff;
+}
+
+.sidebar-user-badge span {
+  font-size: 11px;
+  color: var(--panel-blue);
+  letter-spacing: 0.3px;
+}
+
+.modal-dialog-wide {
+  max-width: 1160px !important;
+  width: 96% !important;
+}
+
+@media (max-width: 680px) {
+  .filter-bar {
+    grid-template-columns: 1fr;
+  }
+  .datetime-12h {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sidebar-user-badge {
+    margin: 0 0 8px;
+    padding: 6px 8px;
+  }
+}

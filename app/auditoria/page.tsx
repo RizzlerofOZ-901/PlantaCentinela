@@ -11,7 +11,9 @@ type Shipment = {
   estatus_general: string;
   creador_nombre?: string | null;
   fecha_despacho_programada: string | null;
+  fecha_despacho_real: string | null;
   fecha_entrega_estimada: string | null;
+  fecha_entrega_real: string | null;
 };
 
 type AuditEvent = {
@@ -256,33 +258,47 @@ export default function AuditoriaPage() {
               </button>
             </div>
 
+            {/* 2-COLUMN SUMMARY HEADER */}
             <div className="audit-meta-grid">
-              <div>
-                <strong>Envío:</strong> {selected.codigo_envio}
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div>
+                  <strong>Envío:</strong> {selected.codigo_envio}
+                </div>
+                <div>
+                  <strong>Cliente:</strong> {selected.nombre_cliente}
+                </div>
+                <div>
+                  <strong>Trailer:</strong>{" "}
+                  {selected.codigo_trailer || "Sin asignar"}
+                </div>
+                <div>
+                  <strong>Creador:</strong> {selected.creador_nombre || "—"}
+                </div>
               </div>
-              <div>
-                <strong>Estado general:</strong>{" "}
-                <span className={statusClass(selected.estatus_general)}>
-                  {String(selected.estatus_general).replaceAll("_", " ")}
-                </span>
-              </div>
-              <div>
-                <strong>Cliente:</strong> {selected.nombre_cliente}
-              </div>
-              <div>
-                <strong>Despacho programado:</strong>{" "}
-                {fmtDateTime(selected.fecha_despacho_programada)}
-              </div>
-              <div>
-                <strong>Trailer:</strong>{" "}
-                {selected.codigo_trailer || "Sin asignar"}
-              </div>
-              <div>
-                <strong>Entrega programada:</strong>{" "}
-                {fmtDateTime(selected.fecha_entrega_estimada)}
-              </div>
-              <div>
-                <strong>Creador:</strong> {selected.creador_nombre || "—"}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div>
+                  <strong>Estado general:</strong>{" "}
+                  <span className={statusClass(selected.estatus_general)}>
+                    {String(selected.estatus_general).replaceAll("_", " ")}
+                  </span>
+                </div>
+                <div>
+                  <strong>Despacho programado:</strong>{" "}
+                  {fmtDateTime(selected.fecha_despacho_programada)}
+                </div>
+                <div>
+                  <strong>Despacho efectivo:</strong>{" "}
+                  {fmtDateTime(selected.fecha_despacho_real)}
+                </div>
+                <div>
+                  <strong>Entrega programada:</strong>{" "}
+                  {fmtDateTime(selected.fecha_entrega_estimada)}
+                </div>
+                <div>
+                  <strong>Entrega efectiva:</strong>{" "}
+                  {fmtDateTime(selected.fecha_entrega_real)}
+                </div>
               </div>
             </div>
 

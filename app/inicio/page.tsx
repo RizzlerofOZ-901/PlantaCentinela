@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { fmtDateTime, getSessionUser, type SessionUser } from "@/app/lib/session";
+import {
+  fmtDateTime,
+  getSessionUser,
+  statusClass,
+  type SessionUser,
+} from "@/app/lib/session";
 
 type Shipment = {
   id_envio: number;
@@ -11,6 +16,7 @@ type Shipment = {
   direccion_destino: string;
   codigo_trailer: string | null;
   estatus_general: string;
+  fecha_despacho_programada: string | null;
   fecha_entrega_estimada: string | null;
   fecha_entrega_real: string | null;
 };
@@ -34,6 +40,8 @@ const ACTIVE_STATUSES = new Set([
   "EN_TRANSITO",
   "CARGANDO",
 ]);
+
+const WORKLOAD_STATUSES = new Set(["CREADO", "CARGANDO", "EN_TRANSITO"]);
 
 export default function InicioPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -138,10 +146,11 @@ export default function InicioPage() {
     ).length;
   }, [shipments]);
 
-  const recentDelivered = useMemo(() => {
-    return shipments
-      .filter((s) => String(s.estatus_general).toUpperCase() === "ENTREGADO")
-      .slice(0, 3);
+  // Active workload: CREADO, CARGANDO, EN_TRANSITO
+  const recentActiveShipments = useMemo(() => {
+    return shipments.filter((s) =>
+      WORKLOAD_STATUSES.has(String(s.estatus_general).toUpperCase())
+    );
   }, [shipments]);
 
   return (
@@ -196,6 +205,7 @@ export default function InicioPage() {
         </div>
       </div>
 
+      {/* Pedidos Recientes (CREADO, CARGANDO, EN_TRANSITO) */}
       <div className="centinela-card">
         <div
           style={{
@@ -203,10 +213,12 @@ export default function InicioPage() {
             justifyContent: "space-between",
             alignItems: "center",
             marginBottom: "12px",
+            gap: "10px",
+            flexWrap: "wrap",
           }}
         >
           <h2 style={{ margin: 0, fontSize: "18px" }}>
-            Pedidos Recientes (Últimos 3 Entregados)
+            Pedidos Recientes (En Curso)
           </h2>
           <Link href="/envios">
             <button
@@ -225,28 +237,29 @@ export default function InicioPage() {
                 <th>Envío</th>
                 <th>Cliente</th>
                 <th>Trailer</th>
-                <th>Fecha Entrega</th>
+                <th>Entrega Programada</th>
                 <th>Estatus</th>
               </tr>
             </thead>
             <tbody>
-              {recentDelivered.map((s) => (
+              {recentActiveShipments.map((s) => (
                 <tr key={s.id_envio}>
                   <td style={{ fontWeight: 700 }}>{s.codigo_envio}</td>
                   <td>{s.nombre_cliente}</td>
-                  <td>{s.codigo_trailer || "—"}</td>
+                  <td>{s.codigo_trailer || "Sin asignar"}</td>
+                  <td>{fmtDateTime(s.fecha_entrega_estimada)}</td>
                   <td>
-                    {fmtDateTime(s.fecha_entrega_real || s.fecha_entrega_estimada)}
-                  </td>
-                  <td>
-                    <span className="status-pill status-green">ENTREGADO</span>
+                    <span className={statusClass(s.estatus_general)}>
+                      {String(s.estatus_general).replaceAll("_", " ")}
+                    </span>
                   </td>
                 </tr>
               ))}
-              {!loading && !recentDelivered.length && (
+              {!loading && !recentActiveShipments.length && (
                 <tr>
                   <td colSpan={5} className="muted">
-                    Aún no hay envíos entregados registrados.
+                    No hay envíos en curso (Creado, Cargando o En Tránsito) por
+                    el momento.
                   </td>
                 </tr>
               )}
@@ -255,6 +268,7 @@ export default function InicioPage() {
         </div>
       </div>
 
+      {/* Alertas y Notificaciones (Active Detours in Transit) */}
       <div className="centinela-card">
         <h2 style={{ margin: "0 0 12px", fontSize: "18px" }}>
           Alertas y Notificaciones (Desvíos en Tránsito)
@@ -312,3 +326,4 @@ export default function InicioPage() {
     </section>
   );
 }
+

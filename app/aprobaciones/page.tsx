@@ -148,6 +148,7 @@ export default function Page() {
             <tr>
               <th>Envío</th>
               <th>Cliente</th>
+              <th>Estado general</th>
               <th>Docs</th>
               <th>Carga</th>
               <th>Ruta</th>
@@ -163,6 +164,11 @@ export default function Page() {
                     {String(r.codigo_envio ?? "—")}
                   </td>
                   <td>{String(r.nombre_cliente ?? "—")}</td>
+                  <td>
+                    <span className={statusClass(r.estatus_general)}>
+                      {display(r.estatus_general)}
+                    </span>
+                  </td>
                   <td>
                     <span className={statusClass(r.estatus_documentacion)}>
                       {display(r.estatus_documentacion)}
@@ -201,7 +207,7 @@ export default function Page() {
             })}
             {!filteredRows.length && (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={7} className="muted">
                   No se encontraron envíos con esos filtros.
                 </td>
               </tr>

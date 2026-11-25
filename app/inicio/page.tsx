@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { fmtDateTime, getSessionUser, type SessionUser } from "@/app/lib/session";
 
 type Shipment = {
   id_envio: number;
@@ -34,20 +35,15 @@ const ACTIVE_STATUSES = new Set([
   "CARGANDO",
 ]);
 
-function formatDate(v: unknown) {
-  if (!v) return "—";
-  const raw = String(v).slice(0, 10);
-  const parts = raw.split("-");
-  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : raw;
-}
-
 export default function InicioPage() {
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [alerts, setAlerts] = useState<DetourAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setUser(getSessionUser());
     let cancelled = false;
 
     async function loadDashboard() {
@@ -62,7 +58,6 @@ export default function InicioPage() {
         if (cancelled) return;
         setShipments(list);
 
-        // Fetch tracking details only for shipments currently EN_TRANSITO
         const inTransit = list.filter(
           (s) => String(s.estatus_general).toUpperCase() === "EN_TRANSITO"
         );
@@ -122,7 +117,6 @@ export default function InicioPage() {
     };
   }, []);
 
-  // 1. Trailers Disponibles count
   const availableTrailersCount = useMemo(() => {
     const occupied = new Set(
       shipments
@@ -138,14 +132,12 @@ export default function InicioPage() {
     return TRAILERS.filter((t) => !occupied.has(t)).length;
   }, [shipments]);
 
-  // 2. Pedidos Activos count (CREADO, EN_ORIGEN, EN_TRANSITO, CARGANDO)
   const activeOrdersCount = useMemo(() => {
     return shipments.filter((s) =>
       ACTIVE_STATUSES.has(String(s.estatus_general).toUpperCase())
     ).length;
   }, [shipments]);
 
-  // 3. Last 3 Delivered Shipments (ENTREGADO)
   const recentDelivered = useMemo(() => {
     return shipments
       .filter((s) => String(s.estatus_general).toUpperCase() === "ENTREGADO")
@@ -166,7 +158,9 @@ export default function InicioPage() {
           >
             INICIO
           </p>
-          <h1>¡BIENVENIDO!</h1>
+          <h1>
+            ¡BIENVENIDO{user ? `, ${user.nombre_completo.toUpperCase()}` : ""}!
+          </h1>
         </div>
         <Link href="/envios">
           <button type="button">Ir a Envíos</button>
@@ -175,7 +169,6 @@ export default function InicioPage() {
 
       {error && <p className="message error">{error}</p>}
 
-      {/* KPI Cards */}
       <div className="kpi-grid">
         <div className="kpi-card">
           <div>
@@ -203,7 +196,6 @@ export default function InicioPage() {
         </div>
       </div>
 
-      {/* Pedidos Recientes (Last 3 Entregados) */}
       <div className="centinela-card">
         <div
           style={{
@@ -217,7 +209,10 @@ export default function InicioPage() {
             Pedidos Recientes (Últimos 3 Entregados)
           </h2>
           <Link href="/envios">
-            <button type="button" style={{ padding: "6px 14px", fontSize: "13px" }}>
+            <button
+              type="button"
+              style={{ padding: "6px 14px", fontSize: "13px" }}
+            >
               Ver Todos
             </button>
           </Link>
@@ -241,7 +236,7 @@ export default function InicioPage() {
                   <td>{s.nombre_cliente}</td>
                   <td>{s.codigo_trailer || "—"}</td>
                   <td>
-                    {formatDate(s.fecha_entrega_real || s.fecha_entrega_estimada)}
+                    {fmtDateTime(s.fecha_entrega_real || s.fecha_entrega_estimada)}
                   </td>
                   <td>
                     <span className="status-pill status-green">ENTREGADO</span>
@@ -260,7 +255,6 @@ export default function InicioPage() {
         </div>
       </div>
 
-      {/* Alertas y Notificaciones (Active Detours in Transit) */}
       <div className="centinela-card">
         <h2 style={{ margin: "0 0 12px", fontSize: "18px" }}>
           Alertas y Notificaciones (Desvíos en Tránsito)
@@ -289,7 +283,9 @@ export default function InicioPage() {
                     <span className="muted">({alert.codigo_trailer})</span>
                   )}
                   <div style={{ marginTop: "4px", fontSize: "14px" }}>
-                    <span className="status-pill status-orange">DESVÍO ACTIVO</span>{" "}
+                    <span className="status-pill status-orange">
+                      DESVÍO ACTIVO
+                    </span>{" "}
                     <span>{alert.incident}</span>
                   </div>
                 </div>

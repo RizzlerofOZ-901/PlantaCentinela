@@ -1,9 +1,16 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  clearSessionUser,
+  getAllowedRoutes,
+  getSessionUser,
+  type SessionUser,
+} from "@/app/lib/session";
 
-const links = [
+const allLinks = [
   ["Inicio", "/inicio"],
   ["Envíos", "/envios"],
   ["Documentos", "/documentos"],
@@ -17,6 +24,20 @@ const links = [
 
 export default function Sidebar() {
   const path = usePathname();
+  const router = useRouter();
+  const [user, setUser] = useState<SessionUser | null>(null);
+
+  useEffect(() => {
+    setUser(getSessionUser());
+  }, [path]);
+
+  const allowed = getAllowedRoutes(user);
+  const visibleLinks = allLinks.filter(([, href]) => allowed.includes(href));
+
+  function handleLogout() {
+    clearSessionUser();
+    router.push("/");
+  }
 
   return (
     <aside className="sidebar">
@@ -28,8 +49,18 @@ export default function Sidebar() {
             className="sidebar-logo"
           />
         </div>
+
+        {user && (
+          <div className="sidebar-user-badge">
+            <strong>{user.nombre_completo}</strong>
+            <span>
+              {user.rol} · {user.departamento}
+            </span>
+          </div>
+        )}
+
         <nav aria-label="Navegación principal">
-          {links.map(([name, href]) => (
+          {visibleLinks.map(([name, href]) => (
             <Link
               key={href}
               href={href}
@@ -42,9 +73,9 @@ export default function Sidebar() {
       </div>
 
       <div className="sidebar-footer">
-        <Link href="/" className="sidebar-logout">
+        <button type="button" onClick={handleLogout} className="sidebar-logout">
           Cerrar Sesión
-        </Link>
+        </button>
       </div>
     </aside>
   );

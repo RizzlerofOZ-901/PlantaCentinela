@@ -48,6 +48,20 @@ const KNOWN_CITIES: Array<{ name: string; lat: number; lng: number }> = [
   { name: "Monclova, Coah.", lat: 26.9069, lng: -101.4206 },
 ];
 
+// Real paved highway bypass hubs (West Corridor: Hwy 1 / Lampazos-Villaldama-Mina,
+// East Corridor: Hwy 2 / Parás-Agualeguas-Cerralvo-Marín, Metro bypasses: García / Pesquería)
+const BYPASS_HUBS: Array<{ name: string; point: LatLng }> = [
+  { name: "Lampazos de Naranjo, NL", point: [27.0264, -100.5069] },
+  { name: "Villaldama, NL", point: [26.5011, -100.4264] },
+  { name: "Parás, NL", point: [26.5019, -99.5244] },
+  { name: "Agualeguas, NL", point: [26.3106, -99.5364] },
+  { name: "Cerralvo, NL", point: [26.0858, -99.6169] },
+  { name: "Mina, NL", point: [26.0014, -100.5297] },
+  { name: "Marín, NL", point: [25.8772, -100.0322] },
+  { name: "Pesquería, NL", point: [25.7847, -100.0506] },
+  { name: "García, NL", point: [25.8136, -100.5942] },
+];
+
 export type RouteResult = {
   coordinates: LatLng[];
   distanceKm: number;
@@ -221,18 +235,31 @@ export function findNearestRouteDistanceKm(
 }
 
 /**
- * Builds an oriented corridor polygon (40 km long x 3.2 km wide = ~128 km²)
- * along the highway around `centerKm`, staying safely below ORS's 200 km² limit.
+ * Checks the minimum distance (in km) from a route polyline to a blocked point.
+ */
+function minDistanceToRouteKm(route: LatLng[], target: LatLng): number {
+  let minD = Infinity;
+  // Sample every few vertices for fast checking on long routes
+  const step = Math.max(1, Math.floor(route.length / 250));
+  for (let i = 0; i < route.length; i += step) {
+    const d = haversine(route[i], target);
+    if (d < minD) minD = d;
+  }
+  return minD;
+}
+
+/**
+ * Builds a small oriented corridor polygon for short-range (< 115 km) detours.
  */
 function buildCorridorPolygon(
   route: LatLng[],
   centerKm: number,
   totalKm: number,
-  halfLengthKm = 20,
-  halfWidthKm = 1.6
+  halfLengthKm = 8,
+  halfWidthKm = 1.2
 ) {
-  const startKm = Math.max(2, centerKm - halfLengthKm);
-  const endKm = Math.min(totalKm - 2, centerKm + halfLengthKm);
+  const startKm = Math.max(1, centerKm - halfLengthKm);
+  const endKm = Math.min(totalKm - 1, centerKm + halfLengthKm);
   const p1 = pointAtDistance(route, startKm);
   const p2 = pointAtDistance(route, endKm);
 
@@ -240,7 +267,6 @@ function buildCorridorPolygon(
   const dLng = p2[1] - p1[1];
   const len = Math.hypot(dLat, dLng) || 0.001;
 
-  // Perpendicular unit vector scaled to ~halfWidthKm
   const degPerKm = 1 / 111;
   const perpLat = (-dLng / len) * (halfWidthKm * degPerKm);
   const perpLng = (dLat / len) * (halfWidthKm * degPerKm);
@@ -257,8 +283,9 @@ function buildCorridorPolygon(
 }
 
 /**
- * Tries to compute a real road detour around a 40 km blocked zone on `activeRoute`.
- * Returns `null` if no valid alternative route exists (so the caller can apply a 10s delay).
+ * Computes a brand-new alternative road route from `currentPosition` to `destination`
+ * that avoids `clickedPoint`, working reliably at ANY distance (> 150 km included).
+ * Returns `null` only if no valid bypass exists (triggering the 10s traffic delay).
  */
 export async function recalculateAvoidingZone(
   activeRoute: LatLng[],
@@ -268,61 +295,66 @@ export async function recalculateAvoidingZone(
   totalDistanceKm: number
 ): Promise<{ route: RouteResult; snappedPoint: LatLng; blockedKm: number } | null> {
   const nearest = findNearestRouteDistanceKm(activeRoute, clickedPoint);
+  const directKm = haversine(currentPosition, destination);
 
-  // Strategy 1: 40 km x 3.2 km corridor polygon along the highway (~128 km² < 200 km² ORS limit)
-  try {
-    const corridor = buildCorridorPolygon(
+  // Pick up to 4 real highway bypass hubs (West & East corridors) that are:
+  // 1) At least 18 km away from the blocked point
+  // 2) Not behind the truck by an excessive margin
+  const rankedHubs = BYPASS_HUBS.filter(
+    (hub) => haversine(hub.point, nearest.point) >= 18
+  )
+    .map((hub) => {
+      const detourEst =
+        haversine(currentPosition, hub.point) + haversine(hub.point, destination);
+      return { ...hub, detourEst };
+    })
+    .sort((a, b) => a.detourEst - b.detourEst)
+    .slice(0, 4);
+
+  const tasks: Promise<RouteResult>[] = rankedHubs.map((hub) =>
+    getRoadRoute([currentPosition, hub.point, destination])
+  );
+
+  // If remaining distance is safely below ORS's 150 km avoid_polygons cap,
+  // also try a direct polygon-avoidance detour in parallel.
+  if (directKm < 115) {
+    const poly = buildCorridorPolygon(
       activeRoute,
       nearest.km,
       totalDistanceKm,
-      20,
-      1.6
+      8,
+      1.2
     );
-    const detour = await getRoadRoute([currentPosition, destination], corridor);
-    if (detour.coordinates.length >= 2) {
-      return { route: detour, snappedPoint: nearest.point, blockedKm: nearest.km };
-    }
-  } catch (err) {
-    console.warn("Strategy 1 (40 km corridor) unavailable, trying lateral bypass:", err);
+    tasks.push(getRoadRoute([currentPosition, destination], poly));
   }
 
-  // Strategy 2: Lateral East / West bypass waypoints around the 40 km zone, picking shortest valid route
-  const offsetDeg = 0.28; // ~30 km lateral offset to force a parallel highway
-  const candidates: LatLng[][] = [
-    [currentPosition, [nearest.point[0], nearest.point[1] + offsetDeg], destination],
-    [currentPosition, [nearest.point[0], nearest.point[1] - offsetDeg], destination],
-  ];
+  const settled = await Promise.allSettled(tasks);
+  const validDetours: RouteResult[] = [];
 
-  const validResults: RouteResult[] = [];
-  const smallBlock = buildCorridorPolygon(
-    activeRoute,
-    nearest.km,
-    totalDistanceKm,
-    6,
-    1.5
-  );
-
-  for (const wp of candidates) {
-    try {
-      const r = await getRoadRoute(wp, smallBlock);
-      if (r.coordinates.length >= 2) {
-        validResults.push(r);
+  for (const res of settled) {
+    if (res.status === "fulfilled" && res.value.coordinates.length >= 2) {
+      // Ensure the alternative route actually steers clear of the blocked point (>= 3.5 km away)
+      const clearanceKm = minDistanceToRouteKm(
+        res.value.coordinates,
+        nearest.point
+      );
+      if (clearanceKm >= 3.5) {
+        validDetours.push(res.value);
       }
-    } catch {
-      // Ignore failed candidate
     }
   }
 
-  if (validResults.length > 0) {
-    validResults.sort((a, b) => a.distanceKm - b.distanceKm);
+  if (validDetours.length > 0) {
+    // Pick the shortest valid alternative route
+    validDetours.sort((a, b) => a.distanceKm - b.distanceKm);
     return {
-      route: validResults[0],
+      route: validDetours[0],
       snappedPoint: nearest.point,
       blockedKm: nearest.km,
     };
   }
 
-  // Strategy 3: No alternative route available
+  // No alternative route available -> caller applies 10-second traffic delay
   return null;
 }
 

@@ -223,8 +223,24 @@ export default function TrackingPage() {
     [shipments, selectedId]
   );
 
+  // Progressive display: always show Origin (first) and Destination (last),
+  // and reveal intermediate 30 km city checkpoints only once ALCANZADO or BLOQUEADO.
+  const visibleCheckpoints = useMemo(() => {
+    const list = tracking?.checkpoints ?? [];
+    if (list.length <= 2) return list;
+
+    const lastIndex = list.length - 1;
+    return list.filter((cp, idx) => {
+      const isOrigin = idx === 0;
+      const isDestination = idx === lastIndex;
+      const isRevealed =
+        cp.estatus === "ALCANZADO" || cp.estatus === "BLOQUEADO";
+      return isOrigin || isDestination || isRevealed;
+    });
+  }, [tracking?.checkpoints]);
+
   const mapCheckpoints: MapCheckpoint[] = useMemo(() => {
-    return (tracking?.checkpoints ?? []).map((checkpoint) => ({
+    return visibleCheckpoints.map((checkpoint) => ({
       id: String(checkpoint.id_checkpoint),
       label:
         checkpoint.ubicacion || `Punto ${checkpoint.numero_checkpoint}`,
@@ -233,9 +249,9 @@ export default function TrackingPage() {
       lng: Number(checkpoint.longitud),
       status: checkpoint.estatus,
     }));
-  }, [tracking?.checkpoints]);
+  }, [visibleCheckpoints]);
 
-  // Slower 6-second polling; pauses while recalculating a detour
+  // 6-second polling; pauses while recalculating a detour
   useEffect(() => {
     if (
       selectedId === null ||
@@ -296,7 +312,7 @@ export default function TrackingPage() {
     if (!incident?.trim()) return;
 
     setIncidentLoading(true);
-    setMessage("Calculando ruta alterna alrededor de la zona de 40 km...");
+    setMessage("Calculando ruta alterna por carreteras disponibles...");
 
     try {
       const response = await fetch(`/api/tracking/${selectedId}`, {
@@ -590,56 +606,63 @@ export default function TrackingPage() {
                     Recorrido por ciudad (cada 30 km)
                   </h3>
 
-                  {tracking.checkpoints.length === 0 ? (
+                  {visibleCheckpoints.length === 0 ? (
                     <p className="muted" style={{ margin: 0 }}>
                       Sin puntos de recorrido registrados.
                     </p>
                   ) : (
                     <ol className="checkpoint-list">
-                      {tracking.checkpoints.map((checkpoint) => (
-                        <li
-                          key={checkpoint.id_checkpoint}
-                          className={
-                            checkpoint.estatus === "ALCANZADO"
-                              ? "checkpoint-current"
-                              : ""
-                          }
-                          style={
-                            checkpoint.estatus === "BLOQUEADO"
-                              ? {
-                                  borderColor: "#e7a4a1",
-                                  background: "#fde8e7",
-                                }
-                              : undefined
-                          }
-                        >
-                          <div
-                            className="checkpoint-dot"
+                      {visibleCheckpoints.map((checkpoint, idx) => {
+                        const isDestination =
+                          idx === visibleCheckpoints.length - 1 &&
+                          visibleCheckpoints.length > 1;
+                        return (
+                          <li
+                            key={checkpoint.id_checkpoint}
+                            className={
+                              checkpoint.estatus === "ALCANZADO"
+                                ? "checkpoint-current"
+                                : ""
+                            }
                             style={
                               checkpoint.estatus === "BLOQUEADO"
-                                ? { background: "#b91c1c" }
+                                ? {
+                                    borderColor: "#e7a4a1",
+                                    background: "#fde8e7",
+                                  }
                                 : undefined
                             }
-                          />
-                          <div>
-                            <strong>
-                              {checkpoint.ubicacion ||
-                                `Punto ${checkpoint.numero_checkpoint}`}
-                            </strong>
-                            <div className="muted">
-                              {formatKm(checkpoint.distancia_acumulada_km)}
-                              {checkpoint.fecha_registro
-                                ? ` · ${fmtDateTime(checkpoint.fecha_registro)}`
-                                : ""}
-                            </div>
-                            {checkpoint.observaciones && (
+                          >
+                            <div
+                              className="checkpoint-dot"
+                              style={
+                                checkpoint.estatus === "BLOQUEADO"
+                                  ? { background: "#b91c1c" }
+                                  : undefined
+                              }
+                            />
+                            <div>
+                              <strong>
+                                {checkpoint.ubicacion ||
+                                  `Punto ${checkpoint.numero_checkpoint}`}
+                              </strong>
                               <div className="muted">
-                                {checkpoint.observaciones}
+                                {formatKm(checkpoint.distancia_acumulada_km)}
+                                {checkpoint.fecha_registro
+                                  ? ` · ${fmtDateTime(checkpoint.fecha_registro)}`
+                                  : isDestination
+                                    ? " · Destino final"
+                                    : ""}
                               </div>
-                            )}
-                          </div>
-                        </li>
-                      ))}
+                              {checkpoint.observaciones && (
+                                <div className="muted">
+                                  {checkpoint.observaciones}
+                                </div>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ol>
                   )}
                 </aside>
@@ -653,7 +676,7 @@ export default function TrackingPage() {
                       <h2 style={{ margin: "0 0 2px" }}>Mapa de ruta</h2>
                       <p className="muted" style={{ margin: 0 }}>
                         {isInTransit && blockMode
-                          ? "Haz clic en cualquier punto de la ruta para simular un bloqueo vial de 40 km."
+                          ? "Haz clic en cualquier punto de la ruta para simular un bloqueo vial y calcular una ruta alterna."
                           : "Ruta vial calculada y posición simulada del camión."}
                       </p>
                     </div>
@@ -695,8 +718,8 @@ export default function TrackingPage() {
                     style={{ marginBottom: 0, marginTop: "10px" }}
                   >
                     © OpenStreetMap contributors. Si no existe vía alterna
-                    alrededor del bloqueo de 40 km, la unidad se detiene 10
-                    segundos simulando tráfico intenso.
+                    disponible, la unidad se detiene 10 segundos simulando
+                    tráfico intenso.
                   </p>
                 </div>
               </div>

@@ -3,17 +3,21 @@ import type { RowDataPacket } from "mysql2";
 import pool from "@/app/lib/db";
 import { logAuditEvent } from "@/app/lib/mongodb";
 import {
+  destinationFor,
   getPositionOnRoute,
   initializeTracking,
-  recalculateAvoiding,
+  recalculateAvoidingZone,
+  rebuildTrackingCheckpoints,
+  resolveCityName,
   type LatLng,
 } from "@/app/lib/tracking";
 
 type Context = { params: Promise<{ id: string }> };
 
-// Simulation settings.
-const ADVANCE_INTERVAL_SECONDS = 2;
-const ADVANCE_DISTANCE_KM = 25;
+// Slower pace so users can click the map and observe real-time rerouting
+const ADVANCE_INTERVAL_SECONDS = 6;
+const ADVANCE_DISTANCE_KM = 15;
+const NO_ROUTE_DELAY_SECONDS = 10;
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
@@ -21,23 +25,19 @@ function jsonError(message: string, status = 400) {
 
 function parseRoute(value: unknown): LatLng[] {
   const parsed = typeof value === "string" ? JSON.parse(value) : value;
-
   if (!Array.isArray(parsed)) {
     throw new Error("Geometría de ruta inválida.");
   }
-
   return parsed as LatLng[];
 }
 
 export async function GET(_request: NextRequest, { params }: Context) {
   const id = Number((await params).id);
-
   if (!Number.isInteger(id) || id <= 0) {
     return jsonError("ID de envío inválido.");
   }
 
   try {
-    // This also repairs missing checkpoints for sessions created previously.
     await initializeTracking(id);
 
     const [rows] = await pool.execute<RowDataPacket[]>(
@@ -77,6 +77,8 @@ export async function GET(_request: NextRequest, { params }: Context) {
       Math.min(progress, Number(session.distancia_total_km))
     );
 
+    const blockedCp = checkpointRows.find((c) => c.estatus === "BLOQUEADO");
+
     return NextResponse.json({
       shipment: {
         id_envio: id,
@@ -98,6 +100,9 @@ export async function GET(_request: NextRequest, { params }: Context) {
         state: session.estado,
         currentPosition: position,
         incident: session.incidente_actual,
+        blockedCenter: blockedCp
+          ? ([Number(blockedCp.latitud), Number(blockedCp.longitud)] as LatLng)
+          : null,
       },
       checkpoints: checkpointRows,
     });
@@ -114,12 +119,18 @@ export async function GET(_request: NextRequest, { params }: Context) {
 
 export async function POST(request: NextRequest, { params }: Context) {
   const id = Number((await params).id);
-
   if (!Number.isInteger(id) || id <= 0) {
     return jsonError("ID de envío inválido.");
   }
 
-  let body: { action?: string; checkpointId?: number; incident?: string };
+  let body: {
+    action?: string;
+    checkpointId?: number;
+    lat?: number;
+    lng?: number;
+    incident?: string;
+    actor_nombre?: string;
+  };
 
   try {
     body = await request.json();
@@ -142,10 +153,7 @@ export async function POST(request: NextRequest, { params }: Context) {
 
     if (!rows.length) {
       await connection.rollback();
-      return jsonError(
-        "No existe una sesión de tracking para este envío.",
-        404
-      );
+      return jsonError("No existe una sesión de tracking para este envío.", 404);
     }
 
     const session = rows[0];
@@ -158,102 +166,209 @@ export async function POST(request: NextRequest, { params }: Context) {
       return NextResponse.json({ finished: true });
     }
 
-    if (body.action === "block") {
-      const checkpointId = Number(body.checkpointId);
+    // =========================================================================
+    // ACTION: BLOCK (from clicking the map OR clicking a checkpoint button)
+    // =========================================================================
+    if (body.action === "block_point" || body.action === "block") {
+      let clickedPoint: LatLng | null = null;
 
-      const [cpRows] = await connection.execute<RowDataPacket[]>(
-        `SELECT latitud, longitud
-         FROM tracking_checkpoints
-         WHERE id_checkpoint = ? AND id_envio = ?`,
-        [checkpointId, id]
-      );
+      if (
+        body.action === "block_point" &&
+        Number.isFinite(body.lat) &&
+        Number.isFinite(body.lng)
+      ) {
+        clickedPoint = [Number(body.lat), Number(body.lng)];
+      } else if (body.checkpointId) {
+        const [cpRows] = await connection.execute<RowDataPacket[]>(
+          `SELECT latitud, longitud FROM tracking_checkpoints
+           WHERE id_checkpoint = ? AND id_envio = ?`,
+          [Number(body.checkpointId), id]
+        );
+        if (cpRows.length) {
+          clickedPoint = [
+            Number(cpRows[0].latitud),
+            Number(cpRows[0].longitud),
+          ];
+        }
+      }
 
-      if (!cpRows.length) {
+      if (!clickedPoint) {
         await connection.rollback();
-        return jsonError("Checkpoint no válido.");
+        return jsonError("Coordenadas de bloqueo inválidas.");
       }
 
       const oldRoute = parseRoute(session.ruta_activa);
       const currentKm = Number(session.distancia_avance_km);
+      const totalKm = Number(session.distancia_total_km);
       const currentPosition = getPositionOnRoute(oldRoute, currentKm);
-      const blockedPoint: LatLng = [
-        Number(cpRows[0].latitud),
-        Number(cpRows[0].longitud),
-      ];
+      const clientName = String(session.nombre_cliente);
+      const destination = destinationFor(clientName);
+      const blockedCity = resolveCityName(clickedPoint[0], clickedPoint[1]);
+      const incidentReason = String(
+        body.incident || "Carretera bloqueada (Zona 40 km)"
+      ).slice(0, 90);
+      const actor = String(body.actor_nombre || "Operador Tracking");
 
-      const destinationMap: Record<string, LatLng> = {
-        "JOHNSON CONTROLS": [25.772584, -100.191632],
-        NIDEC: [25.778848, -100.198305],
-        NEMAK: [25.7331043, -100.5371376],
-        METALSA: [25.7674251, -100.1911475],
-      };
-
-      const client = String(session.nombre_cliente).toUpperCase();
-      const destinationEntry = Object.entries(destinationMap).find(([name]) =>
-        client.includes(name)
+      // Attempt to calculate an alternative road route avoiding the 40 km zone
+      const detourResult = await recalculateAvoidingZone(
+        oldRoute,
+        currentPosition,
+        destination,
+        clickedPoint,
+        totalKm
       );
 
-      if (!destinationEntry) {
-        await connection.rollback();
-        return jsonError("No hay destino configurado para este cliente.");
+      if (detourResult) {
+        const { route: detour, snappedPoint } = detourResult;
+        const incidentText = `${incidentReason} — Desvío en ${blockedCity}`.slice(
+          0,
+          120
+        );
+
+        await connection.execute(
+          `UPDATE tracking_sessions
+           SET ruta_activa = ?, distancia_total_km = ?,
+               distancia_avance_km = 0, duracion_estimada_min = ?,
+               incidente_actual = ?, ultimo_avance = NOW()
+           WHERE id_envio = ?`,
+          [
+            JSON.stringify(detour.coordinates),
+            detour.distanceKm,
+            detour.durationMinutes,
+            incidentText,
+            id,
+          ]
+        );
+
+        // Remove unreached pending checkpoints and record the blocked zone marker
+        await connection.execute(
+          `DELETE FROM tracking_checkpoints
+           WHERE id_envio = ? AND estatus IN ('PENDIENTE', 'BLOQUEADO')`,
+          [id]
+        );
+
+        const [maxRows] = await connection.execute<RowDataPacket[]>(
+          "SELECT COALESCE(MAX(numero_checkpoint), 0) AS max_num FROM tracking_checkpoints WHERE id_envio = ?",
+          [id]
+        );
+        let nextNum = Number(maxRows[0]?.max_num ?? 0) + 1;
+
+        await connection.execute(
+          `INSERT INTO tracking_checkpoints
+            (id_envio, numero_checkpoint, distancia_acumulada_km, latitud, longitud, ubicacion, estatus, fecha_registro, observaciones)
+           VALUES (?, ?, ?, ?, ?, ?, 'BLOQUEADO', NOW(), ?)`,
+          [
+            id,
+            nextNum++,
+            Number(detourResult.blockedKm.toFixed(2)),
+            snappedPoint[0],
+            snappedPoint[1],
+            `${blockedCity} (Bloqueo 40 km)`,
+            incidentText,
+          ]
+        );
+
+        await connection.commit();
+
+        // Rebuild upcoming 30 km city checkpoints along the new detour route
+        await rebuildTrackingCheckpoints(
+          id,
+          detour.coordinates,
+          detour.distanceKm,
+          clientName,
+          `${resolveCityName(currentPosition[0], currentPosition[1])} (Desvío)`,
+          nextNum,
+          false
+        );
+
+        await logAuditEvent({
+          modulo: "TRACKING",
+          accion: "INCIDENTE_DESVIO",
+          id_envio: id,
+          codigo_envio: String(session.codigo_envio),
+          actor,
+          estatus: "DESVIO",
+          actualizacion: `${incidentText} · Nueva ruta: ${detour.distanceKm.toFixed(1)} km`,
+        });
+
+        return NextResponse.json({
+          recalculated: true,
+          delayed: false,
+          blockedCenter: snappedPoint,
+          message: `Ruta alterna calculada evitando zona de 40 km en ${blockedCity}.`,
+        });
       }
 
-      // The new route starts at the truck's current position.
-      const detour = await recalculateAvoiding(
-        currentPosition,
-        destinationEntry[1],
-        blockedPoint
+      // NO ALTERNATIVE ROUTE AVAILABLE -> Apply 10-second traffic delay
+      const delayText = `Tráfico pesado / Sin vía alterna en ${blockedCity} (Retraso ${NO_ROUTE_DELAY_SECONDS}s)`.slice(
+        0,
+        120
       );
-
-      const incidentText = String(
-        body.incident || "Carretera bloqueada"
-      ).slice(0, 120);
 
       await connection.execute(
         `UPDATE tracking_sessions
-         SET ruta_activa = ?, distancia_total_km = ?,
-             distancia_avance_km = 0, duracion_estimada_min = ?,
-             incidente_actual = ?, ultimo_avance = NOW()
+         SET incidente_actual = ?,
+             duracion_estimada_min = COALESCE(duracion_estimada_min, 0) + 20,
+             ultimo_avance = DATE_ADD(NOW(), INTERVAL ? SECOND)
          WHERE id_envio = ?`,
-        [
-          JSON.stringify(detour.coordinates),
-          detour.distanceKm,
-          detour.durationMinutes,
-          incidentText,
-          id,
-        ]
+        [delayText, NO_ROUTE_DELAY_SECONDS, id]
+      );
+
+      const [maxRows] = await connection.execute<RowDataPacket[]>(
+        "SELECT COALESCE(MAX(numero_checkpoint), 0) AS max_num FROM tracking_checkpoints WHERE id_envio = ?",
+        [id]
+      );
+      const nextNum = Number(maxRows[0]?.max_num ?? 0) + 1;
+
+      await connection.execute(
+        `DELETE FROM tracking_checkpoints WHERE id_envio = ? AND estatus = 'BLOQUEADO'`,
+        [id]
       );
 
       await connection.execute(
-        `UPDATE tracking_checkpoints
-         SET estatus = 'OMITIDO'
-         WHERE id_envio = ? AND estatus = 'PENDIENTE'
-           AND distancia_acumulada_km <= ?`,
-        [id, currentKm]
+        `INSERT INTO tracking_checkpoints
+          (id_envio, numero_checkpoint, distancia_acumulada_km, latitud, longitud, ubicacion, estatus, fecha_registro, observaciones)
+         VALUES (?, ?, ?, ?, ?, ?, 'BLOQUEADO', NOW(), ?)`,
+        [
+          id,
+          nextNum,
+          Number(currentKm.toFixed(2)),
+          clickedPoint[0],
+          clickedPoint[1],
+          `${blockedCity} (Tráfico / Sin vía alterna)`,
+          delayText,
+        ]
       );
 
       await connection.commit();
 
       await logAuditEvent({
         modulo: "TRACKING",
-        accion: "INCIDENTE_DESVIO",
+        accion: "RETRASO_TRAFICO",
         id_envio: id,
         codigo_envio: String(session.codigo_envio),
-        actor: "Simulador de Ruta",
-        estatus: "DESVIO",
-        actualizacion: `Incidente reportado: ${incidentText} (Ruta recalculada)`,
+        actor,
+        estatus: "RETRASADO",
+        actualizacion: delayText,
       });
 
-      return NextResponse.json({ recalculated: true });
+      return NextResponse.json({
+        recalculated: false,
+        delayed: true,
+        delaySeconds: NO_ROUTE_DELAY_SECONDS,
+        blockedCenter: clickedPoint,
+        message: `No se encontró vía alterna en ${blockedCity}. Unidad detenida ${NO_ROUTE_DELAY_SECONDS} segundos por tráfico pesado.`,
+      });
     }
 
+    // =========================================================================
+    // ACTION: ADVANCE
+    // =========================================================================
     if (body.action !== "advance") {
       await connection.rollback();
       return jsonError("Acción no válida.");
     }
 
-    // Only one successful advance is allowed per shipment every 2 seconds.
-    // The row lock above prevents multiple tabs from advancing simultaneously.
     const [tickRows] = await connection.execute<RowDataPacket[]>(
       `SELECT TIMESTAMPDIFF(SECOND, ultimo_avance, NOW()) AS elapsed
        FROM tracking_sessions
@@ -261,9 +376,13 @@ export async function POST(request: NextRequest, { params }: Context) {
       [id]
     );
 
-    if (Number(tickRows[0]?.elapsed ?? 0) < ADVANCE_INTERVAL_SECONDS) {
+    const elapsed = Number(tickRows[0]?.elapsed ?? 0);
+    if (elapsed < ADVANCE_INTERVAL_SECONDS) {
       await connection.commit();
-      return NextResponse.json({ advanced: false });
+      return NextResponse.json({
+        advanced: false,
+        waitingSeconds: Math.max(0, ADVANCE_INTERVAL_SECONDS - elapsed),
+      });
     }
 
     const total = Number(session.distancia_total_km);
@@ -280,7 +399,6 @@ export async function POST(request: NextRequest, { params }: Context) {
       [nextProgress, nextProgress, id]
     );
 
-    // Capture checkpoints that are about to become ALCANZADO for MongoDB audit.
     const [reachedCheckpoints] = await connection.execute<RowDataPacket[]>(
       `SELECT numero_checkpoint, distancia_acumulada_km, ubicacion
        FROM tracking_checkpoints
@@ -290,17 +408,15 @@ export async function POST(request: NextRequest, { params }: Context) {
       [id, nextProgress]
     );
 
-    // Any pending checkpoint passed by this movement becomes reached.
     await connection.execute(
       `UPDATE tracking_checkpoints
        SET estatus = 'ALCANZADO', fecha_registro = NOW(),
-           observaciones = 'Checkpoint alcanzado por simulación de recorrido'
+           observaciones = 'Paso registrado por el simulador'
        WHERE id_envio = ? AND estatus = 'PENDIENTE'
          AND distancia_acumulada_km <= ?`,
       [id, nextProgress]
     );
 
-    // Reaching the route's total distance completes the shipment.
     if (nextProgress >= total) {
       await connection.execute(
         `UPDATE envios
@@ -313,9 +429,10 @@ export async function POST(request: NextRequest, { params }: Context) {
 
     await connection.commit();
 
-    // Log newly reached checkpoints to MongoDB.
+    // Log each reached city checkpoint to MongoDB
     for (const cp of reachedCheckpoints) {
       const kmText = Number(cp.distancia_acumulada_km).toFixed(1);
+      const cityLabel = cp.ubicacion || `Checkpoint ${cp.numero_checkpoint}`;
       await logAuditEvent({
         modulo: "TRACKING",
         accion: "CHECKPOINT_ALCANZADO",
@@ -323,11 +440,10 @@ export async function POST(request: NextRequest, { params }: Context) {
         codigo_envio: String(session.codigo_envio),
         actor: "Simulador de Ruta",
         estatus: "ALCANZADO",
-        actualizacion: `Checkpoint ${cp.numero_checkpoint}. ${kmText} km · ALCANZADO`,
+        actualizacion: `${cityLabel} · ${kmText} km`,
       });
     }
 
-    // Log final delivery to MongoDB.
     if (nextProgress >= total) {
       await logAuditEvent({
         modulo: "TRACKING",
@@ -336,7 +452,7 @@ export async function POST(request: NextRequest, { params }: Context) {
         codigo_envio: String(session.codigo_envio),
         actor: "Simulador de Ruta",
         estatus: "ENTREGADO",
-        actualizacion: `Entrega completada en destino (${total.toFixed(1)} km) · ENTREGADO`,
+        actualizacion: `Entrega completada en ${session.nombre_cliente} (${total.toFixed(1)} km)`,
       });
     }
 

@@ -49,6 +49,7 @@ type TrackingData = {
     state: string;
     currentPosition: [number, number];
     incident: string | null;
+    blockedCenter?: [number, number] | null;
   };
   checkpoints: Checkpoint[];
 };
@@ -56,6 +57,7 @@ type TrackingData = {
 type MapCheckpoint = {
   id: string;
   label: string;
+  km: number;
   lat: number;
   lng: number;
   status: string;
@@ -102,6 +104,7 @@ export default function TrackingPage() {
   const [loadingShipments, setLoadingShipments] = useState(false);
   const [loadingTracking, setLoadingTracking] = useState(false);
   const [incidentLoading, setIncidentLoading] = useState(false);
+  const [blockMode, setBlockMode] = useState(true);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -161,7 +164,6 @@ export default function TrackingPage() {
         );
       }
       setTracking(data as TrackingData);
-      setMessage("");
     } finally {
       setLoadingTracking(false);
     }
@@ -182,6 +184,7 @@ export default function TrackingPage() {
     }
 
     setTracking(null);
+    setMessage("");
     loadTracking(selectedId).catch((error) => {
       setMessage(
         error instanceof Error
@@ -224,19 +227,19 @@ export default function TrackingPage() {
     return (tracking?.checkpoints ?? []).map((checkpoint) => ({
       id: String(checkpoint.id_checkpoint),
       label:
-        checkpoint.ubicacion ||
-        `Checkpoint ${checkpoint.numero_checkpoint} · ${formatKm(
-          checkpoint.distancia_acumulada_km
-        )}`,
+        checkpoint.ubicacion || `Punto ${checkpoint.numero_checkpoint}`,
+      km: Number(checkpoint.distancia_acumulada_km),
       lat: Number(checkpoint.latitud),
       lng: Number(checkpoint.longitud),
       status: checkpoint.estatus,
     }));
   }, [tracking?.checkpoints]);
 
+  // Slower 6-second polling; pauses while recalculating a detour
   useEffect(() => {
     if (
       selectedId === null ||
+      incidentLoading ||
       !tracking ||
       tracking.session.state !== "ACTIVO" ||
       tracking.shipment.estatus_general !== "EN_TRANSITO"
@@ -270,56 +273,61 @@ export default function TrackingPage() {
             : "Error al actualizar el tracking."
         );
       }
-    }, 4000);
+    }, 6000);
 
     return () => window.clearInterval(timer);
   }, [
     selectedId,
+    incidentLoading,
     tracking?.session.state,
     tracking?.shipment.estatus_general,
     loadTracking,
     loadShipments,
   ]);
 
-  async function simulateBlock(checkpoint: Checkpoint) {
-    if (selectedId === null) return;
+  async function handleBlockOnMap(lat: number, lng: number) {
+    if (selectedId === null || incidentLoading) return;
+    if (tracking?.shipment.estatus_general !== "EN_TRANSITO") return;
 
     const incident = window.prompt(
-      "Describe el incidente simulado:",
+      "Describe el bloqueo vial en este punto (zona de 40 km):",
       "Carretera bloqueada"
     );
-
     if (!incident?.trim()) return;
 
     setIncidentLoading(true);
-    setMessage("");
+    setMessage("Calculando ruta alterna alrededor de la zona de 40 km...");
 
     try {
       const response = await fetch(`/api/tracking/${selectedId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "block",
-          checkpointId: checkpoint.id_checkpoint,
+          action: "block_point",
+          lat,
+          lng,
           incident: incident.trim(),
+          actor_nombre: user?.nombre_completo || "Operador Tracking",
         }),
       });
 
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result?.error || "No se pudo recalcular la ruta.");
+        throw new Error(result?.error || "No se pudo procesar el bloqueo.");
       }
 
       await loadTracking(selectedId);
-      setMessage("Ruta recalculada para el incidente simulado.");
+      setMessage(result.message || "Bloqueo procesado.");
     } catch (error) {
       setMessage(
-        error instanceof Error ? error.message : "Error al simular el bloqueo."
+        error instanceof Error ? error.message : "Error al bloquear la ruta."
       );
     } finally {
       setIncidentLoading(false);
     }
   }
+
+  const isInTransit = tracking?.shipment.estatus_general === "EN_TRANSITO";
 
   return (
     <section>
@@ -361,7 +369,7 @@ export default function TrackingPage() {
         </button>
       </header>
 
-      {message && <p className="message">{message}</p>}
+      {message && !selectedId && <p className="message">{message}</p>}
 
       <div className="filter-bar">
         <input
@@ -452,7 +460,6 @@ export default function TrackingPage() {
             className="centinela-card detail-panel modal-dialog modal-dialog-wide"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Proposed Header Structure */}
             <div className="detail-heading" style={{ marginBottom: "14px" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <h2 style={{ margin: 0 }}>Seguimiento</h2>
@@ -474,12 +481,20 @@ export default function TrackingPage() {
                     <strong>Cliente:</strong> {selected.nombre_cliente}
                   </span>
                   <span>
-                    <strong>Trailer:</strong> {selected.codigo_trailer || "Sin trailer"}
+                    <strong>Trailer:</strong>{" "}
+                    {selected.codigo_trailer || "Sin trailer"}
                   </span>
                 </div>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                }}
+              >
                 <span className={statusClass(selected.estatus_general)}>
                   {selected.estatus_general.replaceAll("_", " ")}
                 </span>
@@ -493,6 +508,12 @@ export default function TrackingPage() {
               </div>
             </div>
 
+            {message && (
+              <p className="message" style={{ marginBottom: "12px" }}>
+                {message}
+              </p>
+            )}
+
             {loadingTracking && !tracking ? (
               <div className="panel" style={{ marginBottom: 0 }}>
                 <p className="muted" style={{ margin: 0 }}>
@@ -501,7 +522,10 @@ export default function TrackingPage() {
               </div>
             ) : tracking ? (
               <div className="tracking-layout">
-                <aside className="panel tracking-timeline" style={{ marginBottom: 0 }}>
+                <aside
+                  className="panel tracking-timeline"
+                  style={{ marginBottom: 0 }}
+                >
                   <div className="tracking-times">
                     <div className="tracking-time-item">
                       <span className="tracking-time-label">
@@ -513,7 +537,9 @@ export default function TrackingPage() {
                     </div>
 
                     <div className="tracking-time-item">
-                      <span className="tracking-time-label">Despacho real:</span>
+                      <span className="tracking-time-label">
+                        Despacho efectivo:
+                      </span>
                       <span className="tracking-time-value">
                         {fmtDateTime(tracking.shipment.fecha_despacho_real)}
                       </span>
@@ -529,7 +555,9 @@ export default function TrackingPage() {
                     </div>
 
                     <div className="tracking-time-item">
-                      <span className="tracking-time-label">Entrega real:</span>
+                      <span className="tracking-time-label">
+                        Entrega efectiva:
+                      </span>
                       <span className="tracking-time-value">
                         {fmtDateTime(tracking.shipment.fecha_entrega_real)}
                       </span>
@@ -556,20 +584,15 @@ export default function TrackingPage() {
                         {tracking.session.incident}
                       </p>
                     )}
-                    <p className="muted tracking-summary-note">
-                      La posición es una simulación persistida, no una lectura
-                      GPS del vehículo.
-                    </p>
                   </div>
 
                   <h3 className="tracking-checkpoints-title">
-                    Checkpoints de ruta
+                    Recorrido por ciudad (cada 30 km)
                   </h3>
 
                   {tracking.checkpoints.length === 0 ? (
                     <p className="muted" style={{ margin: 0 }}>
-                      No hay checkpoints pendientes o registrados para este
-                      envío.
+                      Sin puntos de recorrido registrados.
                     </p>
                   ) : (
                     <ol className="checkpoint-list">
@@ -581,48 +604,39 @@ export default function TrackingPage() {
                               ? "checkpoint-current"
                               : ""
                           }
+                          style={
+                            checkpoint.estatus === "BLOQUEADO"
+                              ? {
+                                  borderColor: "#e7a4a1",
+                                  background: "#fde8e7",
+                                }
+                              : undefined
+                          }
                         >
-                          <div className="checkpoint-dot" />
+                          <div
+                            className="checkpoint-dot"
+                            style={
+                              checkpoint.estatus === "BLOQUEADO"
+                                ? { background: "#b91c1c" }
+                                : undefined
+                            }
+                          />
                           <div>
                             <strong>
-                              {checkpoint.numero_checkpoint}.{" "}
                               {checkpoint.ubicacion ||
-                                `Checkpoint ${checkpoint.numero_checkpoint}`}
+                                `Punto ${checkpoint.numero_checkpoint}`}
                             </strong>
                             <div className="muted">
-                              {formatKm(checkpoint.distancia_acumulada_km)} ·{" "}
-                              {checkpoint.estatus}
+                              {formatKm(checkpoint.distancia_acumulada_km)}
+                              {checkpoint.fecha_registro
+                                ? ` · ${fmtDateTime(checkpoint.fecha_registro)}`
+                                : ""}
                             </div>
-                            {checkpoint.fecha_registro && (
-                              <div className="muted">
-                                {fmtDateTime(checkpoint.fecha_registro)}
-                              </div>
-                            )}
                             {checkpoint.observaciones && (
                               <div className="muted">
                                 {checkpoint.observaciones}
                               </div>
                             )}
-
-                            {checkpoint.estatus === "PENDIENTE" &&
-                              tracking.shipment.estatus_general ===
-                                "EN_TRANSITO" && (
-                                <button
-                                  type="button"
-                                  className="secondary"
-                                  style={{
-                                    marginTop: "6px",
-                                    padding: "6px 12px",
-                                    fontSize: "12px",
-                                  }}
-                                  disabled={incidentLoading}
-                                  onClick={() => simulateBlock(checkpoint)}
-                                >
-                                  {incidentLoading
-                                    ? "Recalculando..."
-                                    : "Simular incidente aquí"}
-                                </button>
-                              )}
                           </div>
                         </li>
                       ))}
@@ -630,14 +644,34 @@ export default function TrackingPage() {
                   )}
                 </aside>
 
-                <div className="panel tracking-map-panel" style={{ marginBottom: 0 }}>
-                  <div className="detail-heading">
+                <div
+                  className="panel tracking-map-panel"
+                  style={{ marginBottom: 0 }}
+                >
+                  <div className="detail-heading" style={{ marginBottom: "10px" }}>
                     <div>
                       <h2 style={{ margin: "0 0 2px" }}>Mapa de ruta</h2>
-                      <p className="muted" style={{ margin: "0 0 12px" }}>
-                        Ruta vial calculada y posición simulada del camión.
+                      <p className="muted" style={{ margin: 0 }}>
+                        {isInTransit && blockMode
+                          ? "Haz clic en cualquier punto de la ruta para simular un bloqueo vial de 40 km."
+                          : "Ruta vial calculada y posición simulada del camión."}
                       </p>
                     </div>
+                    {isInTransit && (
+                      <button
+                        type="button"
+                        className={blockMode ? "button-reject" : "secondary"}
+                        style={{ padding: "7px 14px", fontSize: "12.5px" }}
+                        disabled={incidentLoading}
+                        onClick={() => setBlockMode((v) => !v)}
+                      >
+                        {incidentLoading
+                          ? "Recalculando..."
+                          : blockMode
+                            ? "Modo bloqueo: ACTIVO"
+                            : "Activar bloqueo en mapa"}
+                      </button>
+                    )}
                   </div>
 
                   {tracking.session.route.length > 1 ? (
@@ -646,6 +680,9 @@ export default function TrackingPage() {
                       originalRoute={tracking.session.originalRoute}
                       currentPosition={tracking.session.currentPosition}
                       checkpoints={mapCheckpoints}
+                      blockedCenter={tracking.session.blockedCenter}
+                      canBlock={isInTransit && blockMode && !incidentLoading}
+                      onMapClickBlock={handleBlockOnMap}
                     />
                   ) : (
                     <p className="muted">
@@ -657,8 +694,9 @@ export default function TrackingPage() {
                     className="muted"
                     style={{ marginBottom: 0, marginTop: "10px" }}
                   >
-                    © OpenStreetMap contributors. Los incidentes son simulados;
-                    no se consultan cierres ni tráfico en vivo.
+                    © OpenStreetMap contributors. Si no existe vía alterna
+                    alrededor del bloqueo de 40 km, la unidad se detiene 10
+                    segundos simulando tráfico intenso.
                   </p>
                 </div>
               </div>

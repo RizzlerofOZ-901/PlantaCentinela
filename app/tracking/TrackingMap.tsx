@@ -5,13 +5,16 @@ import {
   TileLayer,
   Polyline,
   CircleMarker,
+  Circle,
   Popup,
+  useMapEvents,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 type MapPoint = {
   id: string;
   label: string;
+  km: number;
   lat: number;
   lng: number;
   status: string;
@@ -22,25 +25,57 @@ type Props = {
   originalRoute: [number, number][];
   currentPosition: [number, number];
   checkpoints: MapPoint[];
+  blockedCenter?: [number, number] | null;
+  canBlock?: boolean;
+  onMapClickBlock?: (lat: number, lng: number) => void;
 };
+
+function MapClickHandler({
+  enabled,
+  onSelect,
+}: {
+  enabled: boolean;
+  onSelect?: (lat: number, lng: number) => void;
+}) {
+  useMapEvents({
+    click(e) {
+      if (enabled && onSelect) {
+        onSelect(e.latlng.lat, e.latlng.lng);
+      }
+    },
+  });
+  return null;
+}
 
 export default function TrackingMap({
   route,
   originalRoute,
   currentPosition,
   checkpoints,
+  blockedCenter,
+  canBlock = false,
+  onMapClickBlock,
 }: Props) {
   if (!route.length) return <p>No hay geometría de ruta para mostrar.</p>;
 
   return (
-    <div style={{ width: "100%", height: "100%", minHeight: 420 }}>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        minHeight: 440,
+        cursor: canBlock ? "crosshair" : "grab",
+      }}
+    >
       <MapContainer
         key={`${route[0][0]}-${route[0][1]}-${route.length}`}
         bounds={route}
         boundsOptions={{ padding: [28, 28] }}
         scrollWheelZoom
-        style={{ width: "100%", height: "100%", minHeight: 420 }}
+        style={{ width: "100%", height: "100%", minHeight: 440 }}
       >
+        <MapClickHandler enabled={canBlock} onSelect={onMapClickBlock} />
+
         <TileLayer
           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -53,7 +88,7 @@ export default function TrackingMap({
             pathOptions={{
               color: "#94a3b8",
               weight: 4,
-              opacity: 0.55,
+              opacity: 0.6,
               dashArray: "8 8",
             }}
           />
@@ -61,8 +96,25 @@ export default function TrackingMap({
 
         <Polyline
           positions={route}
-          pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.9 }}
+          pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.92 }}
         />
+
+        {/* 40 km Blocked Zone (20 km radius around clicked point) */}
+        {blockedCenter && (
+          <Circle
+            center={blockedCenter}
+            radius={20000}
+            pathOptions={{
+              color: "#dc2626",
+              fillColor: "#ef4444",
+              fillOpacity: 0.22,
+              weight: 2.5,
+              dashArray: "6 6",
+            }}
+          >
+            <Popup>Zona bloqueada (radio 20 km / tramo 40 km)</Popup>
+          </Circle>
+        )}
 
         <CircleMarker
           center={route[0]}
@@ -73,7 +125,7 @@ export default function TrackingMap({
             fillOpacity: 1,
           }}
         >
-          <Popup>Inicio del tramo activo</Popup>
+          <Popup>Origen / Inicio del tramo activo</Popup>
         </CircleMarker>
 
         <CircleMarker
@@ -98,24 +150,34 @@ export default function TrackingMap({
             weight: 3,
           }}
         >
-          <Popup>Posición simulada del camión</Popup>
+          <Popup>Posición actual del camión</Popup>
         </CircleMarker>
 
         {checkpoints.map((point) => (
           <CircleMarker
             key={point.id}
             center={[point.lat, point.lng]}
-            radius={5}
+            radius={6}
             pathOptions={{
-              color: point.status === "ALCANZADO" ? "#15803d" : "#64748b",
-              fillColor: point.status === "ALCANZADO" ? "#22c55e" : "#cbd5e1",
+              color:
+                point.status === "BLOQUEADO"
+                  ? "#b91c1c"
+                  : point.status === "ALCANZADO"
+                    ? "#15803d"
+                    : "#475569",
+              fillColor:
+                point.status === "BLOQUEADO"
+                  ? "#ef4444"
+                  : point.status === "ALCANZADO"
+                    ? "#22c55e"
+                    : "#cbd5e1",
               fillOpacity: 1,
             }}
           >
             <Popup>
               <strong>{point.label}</strong>
               <br />
-              {point.status}
+              {point.km.toFixed(1)} km
             </Popup>
           </CircleMarker>
         ))}

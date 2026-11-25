@@ -140,7 +140,9 @@ export default function InicioPage() {
 
   const recentDelivered = useMemo(() => {
     return shipments
-      .filter((s) => String(s.estatus_general).toUpperCase() === "ENTREGADO")
+      .filter((s) => String(s.estatus_general).toUpperCase() === "CREADO")
+      .filter((s) => String(s.estatus_general).toUpperCase() === "CARGANDO")
+      .filter((s) => String(s.estatus_general).toUpperCase() === "EN TRANSITO")
       .slice(0, 3);
   }, [shipments]);
 
